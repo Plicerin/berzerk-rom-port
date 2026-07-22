@@ -165,8 +165,8 @@ describe("Renderer", () => {
     const canvas = setupCanvas(container);
 
     expect(canvas).toBeDefined();
-    expect(canvas.width).toBe(640); // 160 * 4
-    expect(canvas.height).toBe(768); // 192 * 4
+    expect(canvas.width).toBe(640); // 4:3 display output for 160×192 TIA
+    expect(canvas.height).toBe(480);
     expect(container.appendChild).toHaveBeenCalled();
   });
 
@@ -295,7 +295,7 @@ describe("GameStateMachine tick", () => {
     const zp = createZeroPage();
     initGame(zp, 0, 0);
     zp.kernelSection = GameState.GAME;
-    const startYPos = zp.playerVertPos; // 142 after initGame
+    const startYPos = zp.playerVertPos;
 
     const state: GameStateMachine = {
       zp,
@@ -308,8 +308,9 @@ describe("GameStateMachine tick", () => {
       colorCycleIndex: 0,
     };
 
-    // Pre-set playerMotion to trigger movement on next tick
-    zp.playerMotion = PLAYER_FRACTIONAL_DELAY_NTSC - 1;
+    // Pre-set playerMotion so fractional accumulator overflows on tick
+    // sum = playerMotion + 112 > 255 → playerMotion > 143
+    zp.playerMotion = 0xff;
 
     tick(state);
     expect(zp.playerVertPos).toBeLessThan(startYPos); // moved up

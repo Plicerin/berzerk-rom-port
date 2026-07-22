@@ -186,11 +186,17 @@ export interface ZeroPage {
   // $FC - kernelSection
   kernelSection: number;
 
+  // $E6 - gameState (used for room exit transition: $FF = exiting room)
+  gameState: number;
+
   // $FD - playerGraphicLSB (also aliased as player0Graphic)
   playerGraphicLSB: number;
 
   // $FE - robotCoarsePos (value to coarse move robot in kernel)
   robotCoarsePos: number;
+
+  // $FF - frameCount (global frame counter, mirrored in GameStateMachine)
+  frameCount: number;
 
   // Aliases (these point to the same memory locations)
   robotGraphics: number[];       // alias of temp01
@@ -265,8 +271,10 @@ export function createZeroPage(): ZeroPage {
     robotMissileSoundIndex: 0,
     ottoVerticalDelta: 0,
     kernelSection: 0,
+    gameState: 0,
     playerGraphicLSB: 0,
     robotCoarsePos: 0,
+    frameCount: 0,
     // Aliases
     robotGraphics: [],  // will reference temp01 in actual usage
     tempPlayerExitingPos: 0,

@@ -150,8 +150,8 @@ export const ROBOT_SHOOTING_LEFT = 0b0010;
 export const ROBOT_SHOOTING_DOWN = 0b0100;
 export const ROBOT_SHOOTING_UP = 0b1000;
 
-export const XROBOT_MISSILE_BOX = 8;
-export const YROBOT_MISSILE_BOX = 6;
+export const XROBOT_MISSILE_BOX = 20;
+export const YROBOT_MISSILE_BOX = 15;
 
 // -----------------------------------------------------------------------------
 // Helper: get region-specific values

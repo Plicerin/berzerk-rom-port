@@ -200,7 +200,8 @@ export const PlayerHorizAnimationTable = [0, 1, 2, 3];
 
 // Offsets into PlayerSprites for shooting direction
 // [fireHoriz, fireUp, fireDown, fireHoriz]
-export const PlayerShootingAnimationTable = [0, 2, 3, 0];
+// Values chosen to avoid collision with PLAYER_DEATH_ANIM_OFFSET (3)
+export const PlayerShootingAnimationTable = [0, 1, 2, 0];
 
 // Fine movement tables (pixel offsets per HMOVE step)
 export const VerticalPixelOffsets = [0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, 0, 0, 0];
@@ -394,8 +395,23 @@ export const RobotAnimationTable: number[][] = [
   [4, 1, 4, 0],
 ];
 
-// -----------------------------------------------------------------------------
-// Maze offset table
+// Flat animation table indexed by animation index (0-25).
+// ASM: lda RobotAnimationTable,y / sta robotAnimationIndex,x
+// Maps current anim index → next anim index.
+export const RobotAnimationTableFlat: number[] = [
+  // Standing: 0-8 → cycle through standing frames
+  1, 2, 3, 4, 5, 6, 7, 8, 0,
+  // Walking Left: 9-11 → cycle through left frames
+  10, 11, 10,
+  // Walking Right: 12-14 → cycle through right frames
+  13, 14, 13,
+  // Walking Up: 15-17 → cycle through up frames
+  16, 17, 15,
+  // Walking Down: 18-21 → cycle through down frames
+  19, 20, 21, 18,
+  // Death: 22-25 → advance through death frames, stay at last
+  23, 24, 25, 25,
+];
 // Each entry = offset * ((H_KERNEL/2) - 4) / 2 = offset * 40
 // For 4 mazes: [0, 40, 80, 120]
 // -----------------------------------------------------------------------------

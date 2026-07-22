@@ -16,6 +16,7 @@ import { createTIAEngine, TIAEngine } from "./tia/TIA";
 import { initGame, tick, GameStateMachine } from "./game";
 import { render, setupCanvas } from "./render/renderer";
 import { MOVE_UP, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT } from "./constants";
+import { agentDecide } from "./game/agent";
 
 // Canvas element
 let canvas: HTMLCanvasElement;
@@ -28,8 +29,10 @@ let gameState: GameStateMachine;
 // Active keys for held-down input
 const keys = new Set<string>();
 const FIRE = 0x10;
+let agentMode = true;
 
 function updateJoystick(): void {
+  if (agentMode) return; // agent controls input
   let input = 0;
   if (keys.has("ArrowUp") || keys.has("w")) input |= MOVE_UP;
   if (keys.has("ArrowDown") || keys.has("s")) input |= MOVE_DOWN;
@@ -41,6 +44,16 @@ function updateJoystick(): void {
 
 function setupInput(): void {
   document.addEventListener("keydown", (e) => {
+    // Toggle agent mode with 'A' key
+    if (e.key === "a" || e.key === "A") {
+      // Only toggle if not using WASD for movement
+      if (!keys.has("w") && !keys.has("s") && !keys.has("d")) {
+        agentMode = !agentMode;
+        console.log(agentMode ? "Agent mode ON" : "Agent mode OFF");
+        return;
+      }
+    }
+
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) {
       e.preventDefault();
       keys.add(e.key);
@@ -94,6 +107,11 @@ export function init(container: HTMLElement): void {
  * Calls tick() to update game state, then renders.
  */
 function renderLoop(_timestamp: number): void {
+  // If agent mode, let AI decide input each frame
+  if (agentMode) {
+    gameState.joystickInput = agentDecide(gameState);
+  }
+
   // Update game state
   tick(gameState);
 

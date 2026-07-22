@@ -68,14 +68,17 @@ import {
   RobotAnimationTable,
 } from "../data/tables";
 
-// TIA resolution
+// TIA logical resolution. Atari 2600 pixels are not square on a 4:3 TV.
 const TIA_WIDTH = 160;
 const TIA_HEIGHT = 192;
 
-// Scale factor for the canvas
-const SCALE = 4;
-const CANVAS_WIDTH = TIA_WIDTH * SCALE;
-const CANVAS_HEIGHT = TIA_HEIGHT * SCALE;
+// 4:3 display output: 160×192 logical pixels rendered as 640×480.
+const SCALE_X = 4;
+const SCALE_Y = 2.5;
+const SCALE = SCALE_Y;
+const SPRITE_SCALE = SCALE_X;
+const CANVAS_WIDTH = TIA_WIDTH * SCALE_X;
+const CANVAS_HEIGHT = TIA_HEIGHT * SCALE_Y;
 
 // Color palette mapping (TIA color values → CSS colors)
 const TIA_COLORS: Record<number, string> = {
@@ -158,27 +161,26 @@ function renderMaze(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
   // PF2 (LSB first): dots 12-19 from bits 0,1,2,3,4,5,6,7
   //
   // Each dot = 4 TIA color-clocks = 4 * SCALE canvas pixels.
-  // The ASM kernel .drawMazeData: index = (Y+1)/2 + mazeOffset.
+  // The ASM kernel .drawMazeData: index = Y/2 + mazeOffset.
 
   const mazeOffset = zp.mazeOffset ?? 0;
   const mazePF0 = zp.mazePF0Value ?? 0;
-  const halfKernel = H_KERNEL / 2; // 88
   const enteringFromNorth = zp.playerStartingLocation === PLAYER_ENTERING_NORTH;
 
   // Each playfield dot is 4 TIA color-clocks wide
-  const dotW = 4 * SCALE;
+  const dotW = 4 * SCALE_X;
 
-  for (let scanline = 0; scanline < halfKernel; scanline++) {
+  for (let scanline = 0; scanline < H_KERNEL; scanline++) {
     let pf0: number;
     let pf1: number;
     let pf2: number;
 
-    if (scanline < 2 || scanline >= 86) {
+    if (scanline < 4 || scanline >= 172) {
       pf0 = 0xe0;
       pf1 = 0xff;
       pf2 = enteringFromNorth ? 0xff : 0x07;
     } else {
-      const dataIndex = ((scanline >> 1) + 1) + mazeOffset;
+      const dataIndex = (scanline >> 2) + mazeOffset;
       pf0 = (MazePF0Data[dataIndex] ?? 0) | mazePF0;
       pf1 = MazePF1Data[dataIndex] ?? 0;
       pf2 = MazePF2Data[dataIndex] ?? 0;
@@ -234,57 +236,60 @@ function renderMaze(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
 // -----------------------------------------------------------------------------
 
 function renderRobots(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
+  // Robot color table (from ASM RobotColorTable)
+  const robotColors = [0x1a, 0x36, 0x0c, 0xca, 0x52, 0xa8, 0xf0, 0xa8];
+
   for (let i = 0; i < 6; i++) {
     const robotVertPos = zp.robotVertPos[i];
     const robotHorizPos = zp.robotHorizPos[i];
     const robotAnimIndex = zp.robotAnimationIndex[i];
 
-    // Skip robots that are off-screen (vertPos = 127 means not on screen)
-    if (robotVertPos >= 127) continue;
-    if (robotHorizPos < 0) continue;
+    if (robotVertPos === 0x7f) continue; // ASM sentinel for off-screen
 
-    // Get the robot's sprite data based on animation state
-    const spriteKey = getRobotAnimKey(robotAnimIndex);
-    const spriteData = RobotSpriteData[spriteKey];
+    // Decode animation index → sprite key + frame
+    const { key, frame } = decodeRobotAnim(robotAnimIndex);
+    const frames = RobotSpriteData[key];
+    if (!frames) continue;
+    const spriteData = frames[frame % frames.length];
     if (!spriteData) continue;
 
-    // Determine robot color from RobotAnimationTable
-    const colorEntry = RobotAnimationTable[i];
-    const colorValue = colorEntry ? colorEntry[0] : 0;
-    const cssColor = getTiaColor(colorValue);
+    // Robot color from color table (indexed by gameLevel/2)
+    const colorIdx = (zp.gameLevel >> 1) & 7;
+    const cssColor = getTiaColor(robotColors[colorIdx]);
 
-    // Draw each frame line of the sprite
+    const screenX = robotHorizPos * SCALE_X;
+
     for (let line = 0; line < spriteData.length; line++) {
-      const frameLines = spriteData[line]; // number[]
-      if (!frameLines || frameLines.length === 0) continue;
-      if (frameLines[0] === 0) continue;
+      const row = spriteData[line];
+      if (row === 0) continue;
 
-      const screenY = (robotVertPos + line) * SCALE;
-      const screenX = robotHorizPos * SCALE;
-
-      // Draw 9-bit sprite row (each bit = 1 pixel)
-      for (let bit = 0; bit < 9; bit++) {
-        if (frameLines[0] & (1 << (8 - bit))) {
+      const screenY = robotVertPos * SCALE_Y + line * SPRITE_SCALE;
+      for (let bit = 0; bit < 8; bit++) {
+        if (row & (1 << (7 - bit))) {
           ctx.fillStyle = cssColor;
-          ctx.fillRect(screenX + bit * SCALE, screenY, SCALE, SCALE);
+          ctx.fillRect(screenX + bit * SPRITE_SCALE, screenY, SPRITE_SCALE, SPRITE_SCALE);
         }
       }
     }
   }
 }
 
-function getRobotAnimKey(animIndex: number): string {
-  // Map animation index to sprite data key
-  const baseOffset = animIndex & 0x1f;
-
-  if (baseOffset < 9) return "standing";
-  if (baseOffset < 12) return "walkingLeft";
-  if (baseOffset < 15) return "walkingRight";
-  if (baseOffset < 18) return "walkingUp";
-  if (baseOffset < 22) return "walkingDown";
-  if (baseOffset < 26) return "death";
-
-  return "standing";
+function decodeRobotAnim(animIndex: number): { key: string; frame: number } {
+  // ASM RobotAnimationTable offsets:
+  // standing: 0-8 (9 frames)
+  // walkingLeft: 9-11 (3 frames)
+  // walkingRight: 12-14 (3 frames)
+  // walkingUp: 15-18 (4 frames)
+  // walkingDown: 19-22 (4 frames)  [note: ASM has 4 entries but data has 2]
+  // death: 23-25 (3 frames)
+  const idx = animIndex & 0x1f;
+  if (idx < 9)  return { key: "standing",    frame: idx };
+  if (idx < 12) return { key: "walkingLeft",  frame: idx - 9 };
+  if (idx < 15) return { key: "walkingRight", frame: idx - 12 };
+  if (idx < 18) return { key: "walkingUp",    frame: idx - 15 };
+  if (idx < 22) return { key: "walkingDown",  frame: idx - 18 };
+  if (idx < 26) return { key: "death",        frame: idx - 23 };
+  return { key: "standing", frame: 0 };
 }
 
 // -----------------------------------------------------------------------------
@@ -299,8 +304,8 @@ function renderEvilOtto(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
 
   if (!spriteData) return;
 
-  const screenX = zp.evilOttoHorizPos * SCALE;
-  const screenY = zp.evilOttoVertPos * SCALE;
+  const screenX = zp.evilOttoHorizPos * SCALE_X;
+  const screenY = zp.evilOttoVertPos * SCALE_Y;
 
   // Otto is red
   ctx.fillStyle = "#ff0000";
@@ -309,9 +314,9 @@ function renderEvilOtto(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
     const spriteRow = spriteData[line];
     if (spriteRow === 0) continue;
 
-    for (let bit = 0; bit < 9; bit++) {
-      if (spriteRow & (1 << (8 - bit))) {
-        ctx.fillRect(screenX + bit * SCALE, screenY + line * SCALE, SCALE, SCALE);
+    for (let bit = 0; bit < 8; bit++) {
+      if (spriteRow & (1 << (7 - bit))) {
+        ctx.fillRect(screenX + bit * SPRITE_SCALE, screenY + line * SPRITE_SCALE, SPRITE_SCALE, SPRITE_SCALE);
       }
     }
   }
@@ -337,8 +342,8 @@ function renderPlayer(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
 
   if (!spriteData) return;
 
-  const screenX = playerHorizPos * SCALE;
-  const screenY = playerVertPos * SCALE;
+  const screenX = playerHorizPos * SCALE_X;
+  const screenY = playerVertPos * SCALE_Y;
 
   // Player is white
   ctx.fillStyle = "#ffffff";
@@ -347,9 +352,9 @@ function renderPlayer(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
     const spriteRow = spriteData[line];
     if (spriteRow === 0) continue;
 
-    for (let bit = 0; bit < 9; bit++) {
-      if (spriteRow & (1 << (8 - bit))) {
-        ctx.fillRect(screenX + bit * SCALE, screenY + line * SCALE, SCALE, SCALE);
+    for (let bit = 0; bit < 8; bit++) {
+      if (spriteRow & (1 << (7 - bit))) {
+        ctx.fillRect(screenX + bit * SPRITE_SCALE, screenY + line * SPRITE_SCALE, SPRITE_SCALE, SPRITE_SCALE);
       }
     }
   }
@@ -360,21 +365,18 @@ function getPlayerSpriteKey(
   direction: number,
   missileDir: number,
 ): string {
-  const baseOffset = animIndex & 0x03;
+  // Death animation (offset 3)
+  if ((animIndex & 0x03) === PLAYER_DEATH_ANIM_OFFSET) return "death";
 
-  if (baseOffset === PLAYER_DEATH_ANIM_OFFSET) return "death";
-
-  // Check for shooting animation
-  if (missileDir !== 0 && (direction === MOVE_UP || direction === MOVE_DOWN)) {
+  // Shooting animations
+  if (missileDir !== 0) {
     if (direction === MOVE_UP) return "fireUp";
     if (direction === MOVE_DOWN) return "fireDown";
-  }
-
-  if (direction === MOVE_RIGHT || direction === MOVE_LEFT) {
     return "fireHoriz";
   }
 
-  if (baseOffset === PLAYER_RUN_ANIM_OFFSET) return "running0";
+  // Running animation (toggles between 0 and 1)
+  if ((animIndex & 0x01) !== 0) return "running1";
 
   return "stationary";
 }
@@ -387,18 +389,18 @@ function renderMissiles(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
   // Player missile
   if (zp.playerMissileFlightTime > 0) {
     ctx.fillStyle = "#ffffff";
-    const pmX = zp.playerMissileHorizPos * SCALE;
-    const pmY = zp.playerMissileVertPos * SCALE;
-    ctx.fillRect(pmX, pmY, SCALE, SCALE);
+    const pmX = zp.playerMissileHorizPos * SCALE_X;
+    const pmY = zp.playerMissileVertPos * SCALE_Y;
+    ctx.fillRect(pmX, pmY, SCALE_X, SCALE_Y);
   }
 
   // Robot missiles (up to 6 active)
   for (let i = 0; i < 6; i++) {
     if (zp.robotMissileFlightTime > 0 && zp.robotHorizPos[i] > 0) {
       ctx.fillStyle = "#ff0000";
-      const rmX = (zp.robotHorizPos[i] + zp.robotMissileHorizPos) * SCALE;
-      const rmY = zp.robotMissileVertPos * SCALE;
-      ctx.fillRect(rmX, rmY, SCALE, SCALE);
+      const rmX = (zp.robotHorizPos[i] + zp.robotMissileHorizPos) * SCALE_X;
+      const rmY = zp.robotMissileVertPos * SCALE_Y;
+      ctx.fillRect(rmX, rmY, SCALE_X, SCALE_Y);
     }
   }
 }
@@ -413,8 +415,8 @@ function renderScore(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
     (zp.playerScore2 * 100) + (zp.playerScore1 * 10) + zp.playerScore0;
 
   ctx.fillStyle = "#ffff00";
-  ctx.font = `${12 * SCALE}px monospace`;
-  ctx.fillText(`SCORE: ${score}`, 4 * SCALE, 12 * SCALE);
+  ctx.font = `${12 * SCALE_Y}px monospace`;
+  ctx.fillText(`SCORE: ${score}`, 4 * SCALE_X, 12 * SCALE_Y);
 }
 
 // -----------------------------------------------------------------------------
@@ -422,29 +424,30 @@ function renderScore(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
 // -----------------------------------------------------------------------------
 
 function renderLives(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
-  const numLives = zp.numberOfLives;
+  const numLives = Math.max(0, zp.numberOfLives | 0);
   if (numLives <= 0) return;
 
-  // Draw small player sprites as life indicators
-  const startX = 4;
-  const spacing = 10;
+  // ASM builds the lives display by writing LivesIndicator pointers into
+  // digitPointer slots 10, 8, 6, ... and then jumping to DisplayLivesKernel.
+  // That places the life icons in the top HUD row, to the right of the score.
+  const maxIcons = Math.min(numLives, 6);
+  const startX = 88;
+  const spacing = 16;
+  const startY = 5;
 
-  for (let i = 0; i < Math.min(numLives, 3); i++) {
-    const spriteData = PlayerSpriteData["stationary"];
-    if (!spriteData) continue;
+  ctx.fillStyle = "#ffffff";
 
-    const screenX = (startX + i * spacing) * SCALE;
-    const screenY = 148 * SCALE;
+  for (let i = 0; i < maxIcons; i++) {
+    const screenX = (startX + i * spacing) * SCALE_X;
+    const screenY = startY * SCALE_Y;
 
-    ctx.fillStyle = "#ffffff";
-
-    for (let line = 0; line < spriteData.length; line++) {
-      const spriteRow = spriteData[line];
+    for (let line = 0; line < LivesIndicator.length; line++) {
+      const spriteRow = LivesIndicator[LivesIndicator.length - 1 - line];
       if (spriteRow === 0) continue;
 
-      for (let bit = 0; bit < 9; bit++) {
-        if (spriteRow & (1 << (8 - bit))) {
-          ctx.fillRect(screenX + bit * SCALE, screenY + line * SCALE, SCALE, SCALE);
+      for (let bit = 0; bit < 8; bit++) {
+        if (spriteRow & (1 << bit)) {
+          ctx.fillRect(screenX + bit * SPRITE_SCALE, screenY + line * SPRITE_SCALE, SPRITE_SCALE, SPRITE_SCALE);
         }
       }
     }
