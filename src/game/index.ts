@@ -465,9 +465,11 @@ function transitionToNewRoom(zp: ZeroPage, exitDir: number): void {
 }
 
 export function updateRobots(zp: ZeroPage, region: number): void {
-  // ASM: robots remain inactive until initRobotDelay reaches $FF.
+  // ASM: sec / ror initRobotDelay — rotate right through carry (carry always set,
+  // so a 1 bit is always inserted at bit 7). Starting value is $AA in attract mode,
+  // or $00 on reset (which then becomes $80 on first tick via sec+ror).
   if (zp.initRobotDelay !== 0xff) {
-    zp.initRobotDelay = ((zp.initRobotDelay >>> 1) | ((zp.initRobotDelay & 1) << 7)) & 0xff;
+    zp.initRobotDelay = (zp.initRobotDelay >>> 1 | 0x80) & 0xff;
     return;
   }
 
@@ -507,29 +509,30 @@ export function updateRobots(zp: ZeroPage, region: number): void {
     if (currentAnim < ROBOT_LEFT_ANIM_OFFSET) {
       // This robot was selected to move — decide direction
       if (i === (robotToMove & 7)) {
-        // Move toward player: compare absolute distances, prefer the axis with larger gap
+        // ROM: random bit decides horizontal vs vertical axis
         const robotX = zp.robotHorizPos[i];
         const robotY = zp.robotVertPos[i];
         const playerX = zp.playerHorizPos;
         const playerY = zp.playerVertPos;
-        const dx = playerX - robotX;
-        const dy = playerY - robotY;
 
-        if (dx === 0 && dy === 0) {
+        if (robotX === playerX && (playerY >> 1) === robotY) {
+          // Same position as player — stand
           setRobotStanding(zp, i);
-        } else if (Math.abs(dx) >= Math.abs(dy)) {
-          // Move horizontally toward player
+        } else if (zp.randomHi & 0x80) {
+          // Vertical axis chosen by random bit — ROM uses playerY/2
+          const playerYHalf = playerY >> 1;
+          if (playerYHalf >= robotY) {
+            setRobotWalkingDirection(zp, i, ROBOT_DOWN_ANIM_OFFSET);
+          } else {
+            setRobotWalkingDirection(zp, i, ROBOT_UP_ANIM_OFFSET);
+          }
+        } else {
+          // Horizontal axis chosen by random bit
+          const dx = playerX - robotX;
           if (dx > 0) {
             setRobotWalkingDirection(zp, i, ROBOT_RIGHT_ANIM_OFFSET);
           } else {
             setRobotWalkingDirection(zp, i, ROBOT_LEFT_ANIM_OFFSET);
-          }
-        } else {
-          // Move vertically toward player
-          if (dy > 0) {
-            setRobotWalkingDirection(zp, i, ROBOT_DOWN_ANIM_OFFSET);
-          } else {
-            setRobotWalkingDirection(zp, i, ROBOT_UP_ANIM_OFFSET);
           }
         }
       } else {
@@ -539,67 +542,57 @@ export function updateRobots(zp: ZeroPage, region: number): void {
       currentAnim = zp.robotAnimationIndex[i] & 0x1f;
     }
 
-    // Robot is in a walking animation — execute movement with wall checks
-    const mazeOff = zp.mazeOffset ?? 0;
-    let moved = false;
-
+    // Execute movement based on current walking direction (ROM-style, no wall checks for horizontal)
     if (currentAnim >= ROBOT_LEFT_ANIM_OFFSET && currentAnim < ROBOT_RIGHT_ANIM_OFFSET) {
-      // Walking left — check wall before moving
-      const newX = zp.robotHorizPos[i] - 1;
-      if (newX >= XMIN && isRobotPositionSafe(newX, zp.robotVertPos[i], mazeOff)) {
-        zp.robotHorizPos[i] = newX;
+      // Walking left — if robot x > player x, move left; otherwise stand
+      if (zp.robotHorizPos[i] > zp.playerHorizPos) {
+        zp.robotHorizPos[i]--;
         advanceRobotAnimation(zp, i);
-        moved = true;
+      } else {
+        setRobotStanding(zp, i);
       }
     } else if (currentAnim >= ROBOT_RIGHT_ANIM_OFFSET && currentAnim < ROBOT_UP_ANIM_OFFSET) {
-      // Walking right — check wall before moving
-      const newX = zp.robotHorizPos[i] + 1;
-      if (newX <= XMAX && isRobotPositionSafe(newX, zp.robotVertPos[i], mazeOff)) {
-        zp.robotHorizPos[i] = newX;
+      // Walking right — if robot x < player x, move right; otherwise stand
+      if (zp.robotHorizPos[i] < zp.playerHorizPos) {
+        zp.robotHorizPos[i]++;
         advanceRobotAnimation(zp, i);
-        moved = true;
+      } else {
+        setRobotStanding(zp, i);
       }
     } else if (currentAnim >= ROBOT_UP_ANIM_OFFSET && currentAnim < ROBOT_DOWN_ANIM_OFFSET) {
-      // Walking up — check wall before moving
-      const newY = zp.robotVertPos[i] - 1;
-      if (newY >= YMIN && isRobotPositionSafe(zp.robotHorizPos[i], newY, mazeOff)) {
-        zp.robotVertPos[i] = newY;
+      // Walking up — check robot-to-robot collision
+      // ROM: if collision, redirect to horizontal (DetermineRobotMovement)
+      if (checkRobotVerticalCollision(zp, i, false)) {
+        // Collision with adjacent robot — switch to horizontal direction
+        if (zp.robotHorizPos[i] > zp.playerHorizPos) {
+          setRobotWalkingDirection(zp, i, ROBOT_LEFT_ANIM_OFFSET);
+        } else {
+          setRobotWalkingDirection(zp, i, ROBOT_RIGHT_ANIM_OFFSET);
+        }
+      } else {
+        zp.robotVertPos[i]--;
         advanceRobotAnimation(zp, i);
-        moved = true;
       }
     } else if (currentAnim >= ROBOT_DOWN_ANIM_OFFSET && currentAnim < ROBOT_DEATH_ANIM_OFFSET) {
-      // Walking down — check wall before moving
-      const newY = zp.robotVertPos[i] + 1;
-      if (newY <= 159 && isRobotPositionSafe(zp.robotHorizPos[i], newY, mazeOff)) {
-        zp.robotVertPos[i] = newY;
+      // Walking down — ROM gates movement at animation frames DOWN (19) and DOWN+2 (21)
+      // Only moves at DOWN+1 (20) and DOWN+3 (22)
+      if (currentAnim === ROBOT_DOWN_ANIM_OFFSET || currentAnim === ROBOT_DOWN_ANIM_OFFSET + 2) {
+        // Skip movement at these frames
         advanceRobotAnimation(zp, i);
-        moved = true;
-      }
-    }
-
-    // If robot couldn't move (hit wall or reached target), pick a new direction
-    if (!moved) {
-      // Try perpendicular directions until one works — but only change direction,
-      // don't move. The next tick will handle the actual movement.
-      // This prevents robots from getting stuck in doorways by moving into
-      // a perpendicular corridor and immediately hitting another wall.
-      const tryDirs = [ROBOT_UP_ANIM_OFFSET, ROBOT_DOWN_ANIM_OFFSET, ROBOT_LEFT_ANIM_OFFSET, ROBOT_RIGHT_ANIM_OFFSET];
-      for (const dir of tryDirs) {
-        let testX = zp.robotHorizPos[i];
-        let testY = zp.robotVertPos[i];
-        if (dir === ROBOT_LEFT_ANIM_OFFSET) testX--;
-        else if (dir === ROBOT_RIGHT_ANIM_OFFSET) testX++;
-        else if (dir === ROBOT_UP_ANIM_OFFSET) testY--;
-        else testY++;
-
-        if (testX >= XMIN && testX <= XMAX && testY >= YMIN && testY <= 159 &&
-            isRobotPositionSafe(testX, testY, mazeOff)) {
-          setRobotWalkingDirection(zp, i, dir);
-          break;
+      } else {
+        // ROM: if collision, redirect to horizontal (DetermineRobotMovement)
+        if (checkRobotVerticalCollision(zp, i, true)) {
+          // Collision with adjacent robot — switch to horizontal direction
+          if (zp.robotHorizPos[i] > zp.playerHorizPos) {
+            setRobotWalkingDirection(zp, i, ROBOT_LEFT_ANIM_OFFSET);
+          } else {
+            setRobotWalkingDirection(zp, i, ROBOT_RIGHT_ANIM_OFFSET);
+          }
+        } else {
+          zp.robotVertPos[i]++;
+          advanceRobotAnimation(zp, i);
         }
       }
-      // If no direction works, the robot stays standing
-      // (animation already set above will keep it in standing state)
     }
 
     // Clamp horizontal position
@@ -746,7 +739,7 @@ function updateRobotMissile(zp: ZeroPage, region: number): void {
     zp.robotMissileDelay = 0; // Reset delay so next shot can fire
     return;
   }
-  if (zp.robotMissileVertPos < YMIN || zp.robotMissileVertPos > 159) {
+  if (zp.robotMissileVertPos < YMIN || zp.robotMissileVertPos >= (H_KERNEL - 8) / 2) {
     zp.robotMissileDirection = 0;
     zp.robotMissileDelay = 0; // Reset delay so next shot can fire
     return;
@@ -915,8 +908,18 @@ function updatePlayer(zp: ZeroPage, region: number, wasShooting: boolean): void 
     // Right exit: playerHorizPos >= XMAX_PLAYER (146)
     // Top exit:   playerVertPos < YMIN + 2
     // Bottom exit: playerVertPos >= H_KERNEL - H_PLAYER*2 (152)
-    if (zp.playerHorizPos === 0 || zp.playerHorizPos >= XMAX_PLAYER ||
-        zp.playerVertPos < YMIN + 2 || zp.playerVertPos >= H_KERNEL - H_PLAYER * 2) {
+    // Also verify the exit point is not blocked by a wall (prevents
+    // the player from triggering an exit by walking through a wall).
+    const mazeOff = zp.mazeOffset ?? 0;
+    const atLeftExit  = zp.playerHorizPos === 0 &&
+                        !isPositionInWall(0, zp.playerVertPos, mazeOff);
+    const atRightExit = zp.playerHorizPos >= XMAX_PLAYER &&
+                        !isPositionInWall(XMAX_PLAYER, zp.playerVertPos, mazeOff);
+    const atTopExit   = zp.playerVertPos < YMIN + 2 &&
+                        !isPositionInWall(zp.playerHorizPos, 0, mazeOff);
+    const atBottomExit= zp.playerVertPos >= H_KERNEL - H_PLAYER * 2 &&
+                        !isPositionInWall(zp.playerHorizPos, 159, mazeOff);
+    if (atLeftExit || atRightExit || atTopExit || atBottomExit) {
       setupRoomExit(zp);
       return;
     }
@@ -993,7 +996,7 @@ function updatePlayerMissile(zp: ZeroPage): void {
     zp.playerMissileDirection = 0;
     return;
   }
-  if (zp.playerMissileVertPos < YMIN || zp.playerMissileVertPos > 159) {
+  if (zp.playerMissileVertPos < YMIN || zp.playerMissileVertPos >= (H_KERNEL - 8) / 2) {
     zp.playerMissileDirection = 0;
     return;
   }
@@ -1184,7 +1187,7 @@ function checkMissileCollisions(zp: ZeroPage): void {
     const dx = Math.abs(zp.playerMissileHorizPos - zp.robotHorizPos[i]);
     const dy = Math.abs(zp.playerMissileVertPos - zp.robotVertPos[i]);
 
-    if (dx < H_ROBOT && dy < H_PLAYER) {
+    if (dx < H_ROBOT && dy < H_ROBOT) {
       zp.robotAnimationIndex[i] = ROBOT_DEATH_ANIM_OFFSET;
       zp.playerMissileDirection = 0;
       zp.playerMissileFlightTime = 0;
@@ -1210,7 +1213,7 @@ function checkMissileCollisions(zp: ZeroPage): void {
       const dx = Math.abs(zp.playerMissileHorizPos - zp.evilOttoHorizPos);
       const dy = Math.abs(zp.playerMissileVertPos - zp.evilOttoVertPos);
 
-      if (dx < H_ROBOT && dy < H_PLAYER) {
+      if (dx < H_ROBOT && dy < H_ROBOT) {
         zp.playerMissileDirection = 0;
         zp.playerMissileFlightTime = 0;
       }
