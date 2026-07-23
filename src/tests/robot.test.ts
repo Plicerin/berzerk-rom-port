@@ -16,12 +16,16 @@ describe("updateRobots - initRobotDelay", () => {
   it("keeps robots inactive while initRobotDelay has not reached 0xff", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
-    zp.initRobotDelay = 0;
+    // Start at $AA (attract mode value) — takes 6 ticks to reach 0xff
+    zp.initRobotDelay = 0xaa;
 
-    for (let i = 0; i < 100; i++) {
+    let reachedFF = false;
+    for (let i = 0; i < 6; i++) {
       updateRobots(zp, NTSC);
       expect(zp.initRobotDelay).not.toBe(0xff);
+      reachedFF = true;
     }
+    expect(reachedFF).toBe(true);
   });
 
   it("does not move robots while initRobotDelay < threshold", () => {

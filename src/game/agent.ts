@@ -19,9 +19,9 @@ import {
 const FIRE = 0x10;
 const PLAYER_W = 8;
 const PLAYER_H = 12;
-const WALL_FEELER = 4;
 const PLAYER_MAX_Y = 159;
 const MISSILE_THREAT_RANGE = 45;
+const ROBOT_SAFE_DISTANCE = 40;
 
 type RobotTarget = { index: number; x: number; y: number; dist: number };
 type QueueNode = { x: number; y: number; firstMove: number };
@@ -31,12 +31,23 @@ export function agentDecide(state: GameStateMachine): number {
 
   if (zp.playerAnimationIndex === PLAYER_DEATH_ANIM_OFFSET) return 0;
 
-  const threatMove = dodgeRobotMissile(zp);
-  if (threatMove !== 0) return threatMove;
+  // 1. Immediate threats — dodge first
+  const missileDodge = dodgeRobotMissile(zp);
+  if (missileDodge !== 0) return missileDodge;
+
+  const ottoDodge = dodgeEvilOtto(zp);
+  if (ottoDodge !== 0) return ottoDodge;
+
+  // 2. Robots too close — flee before they reach us
+  if (isNearRobot(zp)) {
+    const robotDodge = dodgeRobot(zp);
+    if (robotDodge !== 0) return robotDodge;
+  }
 
   const robots = findLiveRobots(zp);
   if (robots.length === 0) return headForExit(zp);
 
+  // 3. Check for a clear shot — if we can shoot, do it
   const shotDir = findClearShot(zp, zp.playerHorizPos, zp.playerVertPos, robots);
   if (shotDir !== 0) {
     if (zp.playerMissileDirection === 0) {
@@ -46,10 +57,12 @@ export function agentDecide(state: GameStateMachine): number {
     return 0;
   }
 
+  // 4. Find a position with a clear shot (BFS avoids robots)
   const pathMove = findPathToShot(zp, robots);
   if (pathMove !== 0) return pathMove;
 
-  return chaseClosestRobot(zp, robots);
+  // 5. Otherwise, keep distance from closest robot
+  return maintainDistance(zp, robots);
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +100,107 @@ function dodgeRobotMissile(zp: ZeroPage): number {
   for (const dir of candidates) {
     if (canMove(zp, dir)) return dir;
   }
+  return 0;
+}
+
+function isNearRobot(zp: ZeroPage): boolean {
+  for (let i = 0; i < MAX_ROBOTS; i++) {
+    if (zp.robotAnimationIndex[i] >= ROBOT_DEATH_ANIM_OFFSET) continue;
+    if (zp.robotVertPos[i] === 0x7f) continue;
+
+    const dx = zp.robotHorizPos[i] - zp.playerHorizPos;
+    const dy = zp.robotVertPos[i] - zp.playerVertPos;
+    if (Math.abs(dx) + Math.abs(dy) < ROBOT_SAFE_DISTANCE) return true;
+  }
+  return false;
+}
+
+function dodgeRobot(zp: ZeroPage): number {
+  let bestDir = 0;
+  let bestDist = -1;
+
+  for (let i = 0; i < MAX_ROBOTS; i++) {
+    if (zp.robotAnimationIndex[i] >= ROBOT_DEATH_ANIM_OFFSET) continue;
+    if (zp.robotVertPos[i] === 0x7f) continue;
+
+    const rx = zp.robotHorizPos[i];
+    const ry = zp.robotVertPos[i];
+    const dx = rx - zp.playerHorizPos;
+    const dy = ry - zp.playerVertPos;
+    const dist = Math.abs(dx) + Math.abs(dy);
+    if (dist >= ROBOT_SAFE_DISTANCE) continue;
+
+    // Push away from robot: reverse the direction to the robot
+    const awayX = dx > 0 ? MOVE_LEFT : MOVE_RIGHT;
+    const awayY = dy > 0 ? MOVE_UP : MOVE_DOWN;
+
+    for (const dir of [awayX, awayY]) {
+      if (!canMove(zp, dir)) continue;
+      const next = stepFrom(zp.playerHorizPos, zp.playerVertPos, dir);
+      const newDist = Math.abs(next.x - rx) + Math.abs(next.y - ry);
+      if (newDist > bestDist) {
+        bestDist = newDist;
+        bestDir = dir;
+      }
+    }
+  }
+
+  return bestDir;
+}
+
+function dodgeEvilOtto(zp: ZeroPage): number {
+  if (zp.evilOttoLaunchTimer < 3 || zp.evilOttoHorizPos <= 0 || zp.evilOttoVertPos <= 0) return 0;
+
+  const px = zp.playerHorizPos;
+  const py = zp.playerVertPos;
+  const ottoX = zp.evilOttoHorizPos;
+  const ottoY = zp.evilOttoVertPos;
+  const dx = ottoX - px;
+  const dy = ottoY - py;
+  const dist = Math.abs(dx) + Math.abs(dy);
+
+  // If Otto is very close, flee in any safe direction
+  if (dist < 20) {
+    for (const dir of [MOVE_LEFT, MOVE_RIGHT, MOVE_UP, MOVE_DOWN]) {
+      if (canMove(zp, dir)) {
+        const next = stepFrom(px, py, dir);
+        const newDist = Math.abs(next.x - ottoX) + Math.abs(next.y - ottoY);
+        if (newDist > dist) return dir;
+      }
+    }
+    return 0;
+  }
+
+  // Otto is approaching — check if we have a clear line and dodge perpendicular
+  if (dist < 80) {
+    const mazeOff = zp.mazeOffset ?? 0;
+    let clearLine = false;
+    if (Math.abs(dy) < H_PLAYER) {
+      const step = dx > 0 ? 1 : -1;
+      for (let x = px; step > 0 ? x < ottoX : x > ottoX; x += step) {
+        if (isPositionInWall(x, py, mazeOff)) { clearLine = false; break; }
+        if (x === ottoX - step) clearLine = true;
+      }
+      if (clearLine) {
+        for (const dir of [MOVE_UP, MOVE_DOWN]) {
+          if (canMove(zp, dir)) return dir;
+        }
+      }
+    }
+    if (Math.abs(dx) < H_ROBOT) {
+      const step = dy > 0 ? 1 : -1;
+      for (let y = py; step > 0 ? y < ottoY : y > ottoY; y += step) {
+        if (isPositionInWall(px, y, mazeOff)) { clearLine = false; break; }
+        if (y === ottoY - step) clearLine = true;
+      }
+      if (clearLine) {
+        for (const dir of [MOVE_LEFT, MOVE_RIGHT]) {
+          if (canMove(zp, dir)) return dir;
+        }
+      }
+    }
+  }
+
   return 0;
 }
 
@@ -206,6 +320,14 @@ function findPathToShot(zp: ZeroPage, robots: RobotTarget[]): number {
       const next = stepFrom(node.x, node.y, dir);
       if (!isPlayerPositionSafe(zp, next.x, next.y)) continue;
 
+      // Avoid stepping into or adjacent to a robot
+      let tooCloseToRobot = false;
+      for (const robot of robots) {
+        const d = Math.abs(next.x - robot.x) + Math.abs(next.y - robot.y);
+        if (d < ROBOT_SAFE_DISTANCE) { tooCloseToRobot = true; break; }
+      }
+      if (tooCloseToRobot) continue;
+
       const nextKey = key(next.x, next.y);
       if (visited.has(nextKey)) continue;
       visited.add(nextKey);
@@ -228,12 +350,22 @@ function preferredMoves(zp: ZeroPage, x: number, y: number, robot: RobotTarget):
   return ordered.filter((dir, index) => ordered.indexOf(dir) === index && canMoveFrom(zp, x, y, dir));
 }
 
-function chaseClosestRobot(zp: ZeroPage, robots: RobotTarget[]): number {
+function maintainDistance(zp: ZeroPage, robots: RobotTarget[]): number {
+  // Stay away from the closest robot — pick the move that maximizes distance
   const robot = robots[0];
+  let bestDir = 0;
+  let bestDist = robot.dist;
+
   for (const dir of preferredMoves(zp, zp.playerHorizPos, zp.playerVertPos, robot)) {
-    return dir;
+    const next = stepFrom(zp.playerHorizPos, zp.playerVertPos, dir);
+    const d = Math.abs(next.x - robot.x) + Math.abs(next.y - robot.y);
+    if (d > bestDist) {
+      bestDist = d;
+      bestDir = dir;
+    }
   }
-  return 0;
+
+  return bestDir;
 }
 
 function findPathToPoint(zp: ZeroPage, targetX: number, targetY: number): number {
@@ -280,8 +412,8 @@ function stepFrom(x: number, y: number, dir: number): { x: number; y: number } {
 function opposite(dir: number): number {
   if (dir === MOVE_RIGHT) return MOVE_LEFT;
   if (dir === MOVE_LEFT) return MOVE_RIGHT;
-  if (dir === MOVE_DOWN) return MOVE_UP;
-  return MOVE_DOWN;
+  if (dir === MOVE_UP) return MOVE_DOWN;
+  return MOVE_UP;
 }
 
 function key(x: number, y: number): number {
@@ -331,19 +463,12 @@ function canMoveFrom(zp: ZeroPage, x: number, y: number, dir: number): boolean {
 function isPlayerPositionSafe(zp: ZeroPage, x: number, y: number): boolean {
   if (x < XMIN || x > XMAX_PLAYER || y < YMIN || y > PLAYER_MAX_Y) return false;
 
-  if (x === XMIN || x === XMAX_PLAYER || y === YMIN || y === PLAYER_MAX_Y) {
-    return true;
-  }
-
+  // Match checkPlayerWallCollisions: only 4 corners, no extra feelers.
   const mazeOff = zp.mazeOffset ?? 0;
   return !(
     isPositionInWall(x, y, mazeOff) ||
     isPositionInWall(x + PLAYER_W - 1, y, mazeOff) ||
     isPositionInWall(x, y + PLAYER_H - 1, mazeOff) ||
-    isPositionInWall(x + PLAYER_W - 1, y + PLAYER_H - 1, mazeOff) ||
-    isPositionInWall(x, y + WALL_FEELER, mazeOff) ||
-    isPositionInWall(x + PLAYER_W - 1, y + WALL_FEELER, mazeOff) ||
-    isPositionInWall(x + WALL_FEELER, y, mazeOff) ||
-    isPositionInWall(x + WALL_FEELER, y + PLAYER_H - 1, mazeOff)
+    isPositionInWall(x + PLAYER_W - 1, y + PLAYER_H - 1, mazeOff)
   );
 }

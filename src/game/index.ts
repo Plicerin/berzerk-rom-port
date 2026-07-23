@@ -104,6 +104,7 @@ import {
   MazeOffsetTable,
   StartingLocationValues,
 } from "../data/tables";
+import { gameLogger } from "./logger";
 
 // -----------------------------------------------------------------------------
 // Game state constants
@@ -379,7 +380,7 @@ function allRobotsDead(zp: ZeroPage): boolean {
  *
  * Sets gameState to $FF to trigger VBLANK room transition.
  */
-function setupRoomExit(zp: ZeroPage): void {
+function setupRoomExit(zp: ZeroPage, frame: number): void {
   // Determine which side the player is exiting from
   let exitDir: number;
   if (zp.playerHorizPos === 0) {
@@ -395,6 +396,13 @@ function setupRoomExit(zp: ZeroPage): void {
   // Save the exiting position (used by SetupForPlayerExitingRoom in ASM)
   zp.tempPlayerExitingPos = exitDir;
   zp.gameState = 0xFF;
+
+  gameLogger.log("ROOM_EXIT_SETUP", {
+    room: zp.gameLevel,
+    playerX: zp.playerHorizPos,
+    playerY: zp.playerVertPos,
+    exitDir,
+  }, frame);
 
   // Hide player (ASM: set playerVertPos to $7F)
   zp.playerVertPos = 0x7f;
@@ -415,7 +423,8 @@ function setupRoomExit(zp: ZeroPage): void {
  * Setup a new room when the player exits through a doorway.
  * ASM: SetupForNewScreen + ResetRobotsForNewBoard
  */
-function transitionToNewRoom(zp: ZeroPage, exitDir: number): void {
+function transitionToNewRoom(zp: ZeroPage, exitDir: number, frame: number): void {
+  const fromRoom = zp.gameLevel;
   zp.gameLevel++;
   zp.numberRobotsKilled = 0;
   zp.initRobotDelay = 0;
@@ -462,6 +471,15 @@ function transitionToNewRoom(zp: ZeroPage, exitDir: number): void {
 
   // Reset robots (ASM: ResetRobotsForNewBoard)
   resetRobots(zp);
+
+  gameLogger.log("ROOM_CHANGE", {
+    fromRoom,
+    toRoom: zp.gameLevel,
+    exitDir,
+    entryDir: zp.playerStartingLocation,
+    playerX: zp.playerHorizPos,
+    playerY: zp.playerVertPos,
+  }, frame);
 }
 
 export function updateRobots(zp: ZeroPage, region: number): void {
@@ -839,7 +857,7 @@ function updateEvilOtto(zp: ZeroPage, region: number): void {
 // Player logic
 // -----------------------------------------------------------------------------
 
-function updatePlayer(zp: ZeroPage, region: number, wasShooting: boolean): void {
+function updatePlayer(zp: ZeroPage, region: number, wasShooting: boolean, frame: number): void {
   // Skip if player is dying or exiting
   if (
     zp.playerAnimationIndex === PLAYER_DEATH_ANIM_OFFSET ||
@@ -919,8 +937,22 @@ function updatePlayer(zp: ZeroPage, region: number, wasShooting: boolean): void 
                         !isPositionInWall(zp.playerHorizPos, 0, mazeOff);
     const atBottomExit= zp.playerVertPos >= H_KERNEL - H_PLAYER * 2 &&
                         !isPositionInWall(zp.playerHorizPos, 159, mazeOff);
-    if (atLeftExit || atRightExit || atTopExit || atBottomExit) {
-      setupRoomExit(zp);
+
+    const triggered = atLeftExit || atRightExit || atTopExit || atBottomExit;
+    gameLogger.log("EXIT_CHECK", {
+      room: zp.gameLevel,
+      playerX: zp.playerHorizPos,
+      playerY: zp.playerVertPos,
+      atLeftExit,
+      atRightExit,
+      atTopExit,
+      atBottomExit,
+      triggered,
+      exitSide: atLeftExit ? "LEFT" : atRightExit ? "RIGHT" : atTopExit ? "TOP" : atBottomExit ? "BOTTOM" : "NONE",
+    }, frame);
+
+    if (triggered) {
+      setupRoomExit(zp, frame);
       return;
     }
   }
@@ -1269,7 +1301,7 @@ function isRobotPositionSafe(x: number, y: number, mazeOffset: number): boolean 
  * Checks the player's bounding box (8px wide, 12px tall).
  * If any corner is inside a wall, reverts to previous position.
  */
-function checkPlayerWallCollisions(zp: ZeroPage): void {
+function checkPlayerWallCollisions(zp: ZeroPage, frame: number): void {
   const mazeOffset = zp.mazeOffset ?? 0;
   const px = zp.playerHorizPos;
   const py = zp.playerVertPos;
@@ -1282,6 +1314,14 @@ function checkPlayerWallCollisions(zp: ZeroPage): void {
     isPositionInWall(px + 7, py + 11, mazeOffset);
 
   if (!inWall) return;
+
+  // Log wall collision before reverting
+  gameLogger.log("WALL_COLLISION", {
+    room: zp.gameLevel,
+    playerX: px,
+    playerY: py,
+    playerDir: zp.playerDirection,
+  }, frame);
 
   // Revert movement: undo in the direction we were moving
   if (zp.playerDirection & MOVE_RIGHT) zp.playerHorizPos--;
@@ -1432,8 +1472,11 @@ export interface GameStateMachine {
 }
 
 export function createGameStateMachine(region: number = NTSC): GameStateMachine {
+  const zp = createZeroPage();
+  initGame(zp, zp.gameSelection, zp.region);
+
   return {
-    zp: createZeroPage(),
+    zp,
     region,
     joystickInput: NO_MOVE,
     lastJoystickInput: NO_MOVE,
@@ -1455,6 +1498,7 @@ export function tick(state: GameStateMachine): void {
 
   // Room exit transition (ASM: VBLANK handles SetupForPlayerExitingRoom when gameState == $FF)
   if (zp.gameState === 0xff) {
+    const fromRoom = zp.gameLevel;
     // Adjust playfield limits based on exit direction
     const exitDir = zp.tempPlayerExitingPos;
     if (exitDir !== PLAYER_ENTERING_SOUTH) {
@@ -1466,7 +1510,14 @@ export function tick(state: GameStateMachine): void {
 
     // When limits meet, transition to new room
     if (zp.upperPlayfieldLimit >= zp.lowerPlayfieldLimit) {
-      transitionToNewRoom(zp, exitDir);
+      gameLogger.log("ROOM_EXIT_TRANSITION", {
+        room: fromRoom,
+        playerX: zp.playerHorizPos,
+        playerY: zp.playerVertPos,
+        upperPlayfieldLimit: zp.upperPlayfieldLimit,
+        lowerPlayfieldLimit: zp.lowerPlayfieldLimit,
+      }, state.frameCount);
+      transitionToNewRoom(zp, exitDir, state.frameCount);
       return; // tick is done for this frame
     }
 
@@ -1477,6 +1528,28 @@ export function tick(state: GameStateMachine): void {
   // VBLANK: clear state, update attract timer
   // This is where the 2600 would clear the screen and handle vertical blanking.
   // In the game logic, we use this to update timers and check for state transitions.
+
+  // Log joystick input changes (only during PLAY state)
+  if (zp.kernelSection === GameState.PLAY) {
+    const joystickChanged = state.joystickInput !== state.lastJoystickInput;
+    if (joystickChanged || state.frameCount % 30 === 0) {
+      const dirBits = state.joystickInput & 0x0f;
+      const dirNames: string[] = [];
+      if (dirBits & MOVE_UP) dirNames.push("UP");
+      if (dirBits & MOVE_DOWN) dirNames.push("DOWN");
+      if (dirBits & MOVE_LEFT) dirNames.push("LEFT");
+      if (dirBits & MOVE_RIGHT) dirNames.push("RIGHT");
+      if (dirBits) {
+        gameLogger.log("JOYSTICK", {
+          room: zp.gameLevel,
+          direction: dirNames.join("+"),
+          fire: !!(state.joystickInput & 0x10),
+          playerX: zp.playerHorizPos,
+          playerY: zp.playerVertPos,
+        }, state.frameCount);
+      }
+    }
+  }
 
   // Update color cycling (attract mode)
   if (zp.kernelSection === GameState.ATTRACT) {
@@ -1515,10 +1588,10 @@ export function tick(state: GameStateMachine): void {
   const isShooting = shootingAtStart || zp.playerMissileDirection !== 0;
 
   // Update player movement
-  updatePlayer(zp, region, isShooting);
+  updatePlayer(zp, region, isShooting, state.frameCount);
 
   // Check player vs playfield walls (ASM: CXP0FB collision)
-  checkPlayerWallCollisions(zp);
+  checkPlayerWallCollisions(zp, state.frameCount);
 
   // Check missile bounds and wall collisions (ASM: DetermineToTurnOffMissiles)
   checkMissileBoundsAndCollisions(zp);

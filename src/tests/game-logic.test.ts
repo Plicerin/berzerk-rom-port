@@ -555,6 +555,11 @@ describe("checkPlayerCollisions (via tick)", () => {
     zp.frameCount = 1; // odd → collision check skipped
     zp.playerHorizPos = 53;
     zp.playerVertPos = 55;
+    // Clear all other robots so they don't collide with the player
+    for (let i = 0; i < 6; i++) {
+      zp.robotHorizPos[i] = 0;
+      zp.robotVertPos[i] = 0;
+    }
     const gsm = buildStateMachine(zp, NTSC);
 
     tick(gsm);
@@ -591,6 +596,11 @@ describe("checkPlayerCollisions (via tick)", () => {
     zp.robotAnimationIndex[0] = ROBOT_DEATH_ANIM_OFFSET; // death animation
     zp.playerHorizPos = 52;
     zp.playerVertPos = 52;
+    // Clear all other robots so they don't collide with the player
+    for (let i = 1; i < 6; i++) {
+      zp.robotHorizPos[i] = 0;
+      zp.robotVertPos[i] = 0;
+    }
     const gsm = buildStateMachine(zp, NTSC);
 
     tick(gsm);
@@ -608,6 +618,11 @@ describe("checkPlayerCollisions (via tick)", () => {
     zp.robotAnimationIndex[0] = ROBOT_STAND_ANIM_OFFSET;
     zp.playerHorizPos = 52;
     zp.playerVertPos = 52;
+    // Clear all other robots so they don't collide with the player
+    for (let i = 1; i < 6; i++) {
+      zp.robotHorizPos[i] = 0;
+      zp.robotVertPos[i] = 0;
+    }
     const gsm = buildStateMachine(zp, NTSC);
 
     tick(gsm);
@@ -731,6 +746,11 @@ describe("checkMissileCollisions (via tick)", () => {
     zp.playerMissileVertPos = 50;
     zp.evilOttoHorizPos = 50;
     zp.evilOttoVertPos = 50;
+    // Clear all robots so the missile doesn't hit one
+    for (let i = 0; i < 6; i++) {
+      zp.robotHorizPos[i] = 0;
+      zp.robotVertPos[i] = 0;
+    }
     const gsm = buildStateMachine(zp, NTSC);
 
     tick(gsm);

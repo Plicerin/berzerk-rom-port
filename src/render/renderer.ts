@@ -398,7 +398,7 @@ function renderMissiles(ctx: CanvasRenderingContext2D, zp: ZeroPage): void {
   for (let i = 0; i < 6; i++) {
     if (zp.robotMissileFlightTime > 0 && zp.robotHorizPos[i] > 0) {
       ctx.fillStyle = "#ff0000";
-      const rmX = (zp.robotHorizPos[i] + zp.robotMissileHorizPos) * SCALE_X;
+      const rmX = zp.robotMissileHorizPos * SCALE_X;
       const rmY = zp.robotMissileVertPos * SCALE_Y;
       ctx.fillRect(rmX, rmY, SCALE_X, SCALE_Y);
     }
