@@ -211,6 +211,8 @@ export function initGame(zp: ZeroPage, gameSelection: number, region: number): v
   zp.selectDebounce = 0;
   zp.attractModeTimer = 0;
   zp.robotMotionDelay = RobotMotionDelayTable[(zp.gameLevel >> 1) & 7] ?? RobotMotionDelayTable[0];
+  zp.upperPlayfieldLimit = 0;
+  zp.lowerPlayfieldLimit = H_KERNEL / 2;
   zp.robotMissileDirection = 0;
   zp.robotMissileFlightTime = 0;
   zp.robotMissileHorizPos = 0;
@@ -380,22 +382,15 @@ function allRobotsDead(zp: ZeroPage): boolean {
  *
  * Sets gameState to $FF to trigger VBLANK room transition.
  */
-function setupRoomExit(zp: ZeroPage, frame: number): void {
-  // Determine which side the player is exiting from
-  let exitDir: number;
-  if (zp.playerHorizPos === 0) {
-    exitDir = PLAYER_ENTERING_WEST;
-  } else if (zp.playerHorizPos >= XMAX_PLAYER) {
-    exitDir = PLAYER_ENTERING_EAST;
-  } else if (zp.playerVertPos < YMIN + 2) {
-    exitDir = PLAYER_ENTERING_NORTH;
-  } else {
-    exitDir = PLAYER_ENTERING_SOUTH;
-  }
-
+function setupRoomExit(zp: ZeroPage, exitDir: number, frame: number): void {
   // Save the exiting position (used by SetupForPlayerExitingRoom in ASM)
   zp.tempPlayerExitingPos = exitDir;
   zp.gameState = 0xFF;
+
+  // Start the room-close transition from a fully open playfield.
+  // Without this, the transition can complete immediately or from stale limits.
+  zp.upperPlayfieldLimit = 0;
+  zp.lowerPlayfieldLimit = H_KERNEL / 2;
 
   gameLogger.log("ROOM_EXIT_SETUP", {
     room: zp.gameLevel,
@@ -408,8 +403,7 @@ function setupRoomExit(zp: ZeroPage, frame: number): void {
   zp.playerVertPos = 0x7f;
   zp.playerAnimationIndex = 0;
 
-  // Reset robots and missiles
-  zp.numberRobotsKilled = 0;
+  // Reset robot/missile motion state; keep numberRobotsKilled for transition bonus.
   zp.initRobotDelay = 0;
   zp.robotMotionDelay = 0;
   zp.robotMissileDirection = 0;
@@ -419,6 +413,38 @@ function setupRoomExit(zp: ZeroPage, frame: number): void {
   zp.evilOttoLaunchTimer = 0;
 }
 
+function getRoomExitDirection(zp: ZeroPage): number | null {
+  const doorwayX = InitHorizontalPosition[PLAYER_ENTERING_NORTH];
+  const doorwayY = InitVerticalPosition[PLAYER_ENTERING_WEST];
+  const horizontalDoorMin = doorwayX - 4;
+  const horizontalDoorMax = doorwayX + 4;
+  const verticalDoorMin = doorwayY - 4;
+  const verticalDoorMax = doorwayY + 4;
+
+  if (zp.playerHorizPos === XMIN &&
+      zp.playerVertPos >= verticalDoorMin &&
+      zp.playerVertPos <= verticalDoorMax) {
+    return PLAYER_ENTERING_WEST;
+  }
+  if (zp.playerHorizPos >= XMAX_PLAYER &&
+      zp.playerVertPos >= verticalDoorMin &&
+      zp.playerVertPos <= verticalDoorMax) {
+    return PLAYER_ENTERING_EAST;
+  }
+  if (zp.playerVertPos < YMIN + 2 &&
+      zp.playerHorizPos >= horizontalDoorMin &&
+      zp.playerHorizPos <= horizontalDoorMax) {
+    return PLAYER_ENTERING_NORTH;
+  }
+  if (zp.playerVertPos >= H_KERNEL - H_PLAYER * 2 &&
+      zp.playerHorizPos >= horizontalDoorMin &&
+      zp.playerHorizPos <= horizontalDoorMax) {
+    return PLAYER_ENTERING_SOUTH;
+  }
+
+  return null;
+}
+
 /**
  * Setup a new room when the player exits through a doorway.
  * ASM: SetupForNewScreen + ResetRobotsForNewBoard
@@ -426,11 +452,18 @@ function setupRoomExit(zp: ZeroPage, frame: number): void {
 function transitionToNewRoom(zp: ZeroPage, exitDir: number, frame: number): void {
   const fromRoom = zp.gameLevel;
   zp.gameLevel++;
+  zp.gameState = 0;
+  zp.kernelSection = GameState.PLAY;
+  if (zp.robotVertPos[0] === 0x7f) {
+    incrementScoreBCD(zp, (zp.numberRobotsKilled << 4) & 0xff);
+  }
   zp.numberRobotsKilled = 0;
   zp.initRobotDelay = 0;
   zp.robotMotionDelay = RobotMotionDelayTable[(zp.gameLevel >> 1) & 7] ?? RobotMotionDelayTable[0];
+  zp.mazePF0Value = 0;
 
-  // Reset playfield limits for transition
+  // Reset playfield limits; they will be collapsed again below to create
+  // a directional room-open reveal from the incoming doorway.
   zp.upperPlayfieldLimit = 0;
   zp.lowerPlayfieldLimit = H_KERNEL / 2;
 
@@ -442,29 +475,30 @@ function transitionToNewRoom(zp: ZeroPage, exitDir: number, frame: number): void
   }
   zp.mazeOffset = MazeOffsetTable[newMaze];
 
-  // Determine entry direction explicitly from TS direction constants.
-  // This avoids relying on ASM table ordering for east/west indices.
-  let entryDir: number;
-  switch (exitDir) {
-    case PLAYER_ENTERING_NORTH:
-      entryDir = PLAYER_ENTERING_SOUTH;
-      break;
-    case PLAYER_ENTERING_SOUTH:
-      entryDir = PLAYER_ENTERING_NORTH;
-      break;
-    case PLAYER_ENTERING_WEST:
-      entryDir = PLAYER_ENTERING_EAST;
-      break;
-    case PLAYER_ENTERING_EAST:
-      entryDir = PLAYER_ENTERING_WEST;
-      break;
-    default:
-      entryDir = PLAYER_ENTERING_NORTH;
-      break;
-  }
+  const entryDir = StartingLocationValues[exitDir] ?? PLAYER_ENTERING_NORTH;
   zp.playerStartingLocation = entryDir;
   zp.playerHorizPos = InitHorizontalPosition[entryDir];
   zp.playerVertPos = InitVerticalPosition[entryDir];
+
+  // Start the next room collapsed so it opens from the player's incoming side.
+  switch (entryDir) {
+    case PLAYER_ENTERING_NORTH:
+      zp.upperPlayfieldLimit = 0;
+      zp.lowerPlayfieldLimit = 0;
+      break;
+    case PLAYER_ENTERING_SOUTH:
+      zp.upperPlayfieldLimit = H_KERNEL / 2;
+      zp.lowerPlayfieldLimit = H_KERNEL / 2;
+      break;
+    case PLAYER_ENTERING_WEST:
+      zp.upperPlayfieldLimit = 0;
+      zp.lowerPlayfieldLimit = 0;
+      break;
+    case PLAYER_ENTERING_EAST:
+      zp.upperPlayfieldLimit = H_KERNEL / 2;
+      zp.lowerPlayfieldLimit = H_KERNEL / 2;
+      break;
+  }
   zp.playerDirection = NO_MOVE;
   zp.playerAnimationIndex = PLAYER_STAND_ANIM_OFFSET;
   zp.playerMissileDirection = 0;
@@ -490,6 +524,8 @@ export function updateRobots(zp: ZeroPage, region: number): void {
     zp.initRobotDelay = (zp.initRobotDelay >>> 1 | 0x80) & 0xff;
     return;
   }
+
+  const mazeOffset = zp.mazeOffset ?? 0;
 
   // Fractional accumulator for robot motion timing.
   // ASM: adc robotMotionDelay / sta robotMotion, animate on carry.
@@ -525,7 +561,13 @@ export function updateRobots(zp: ZeroPage, region: number): void {
 
     // If robot is standing (anim < ROBOT_LEFT_ANIM_OFFSET = 9)
     if (currentAnim < ROBOT_LEFT_ANIM_OFFSET) {
-      // This robot was selected to move — decide direction
+      // ASM only chooses a chase direction from the final standing frame.
+      if (currentAnim !== ROBOT_LEFT_ANIM_OFFSET - 1) {
+        advanceRobotAnimation(zp, i);
+        continue;
+      }
+
+      // This robot was selected to move — decide direction for a future frame.
       if (i === (robotToMove & 7)) {
         // ROM: random bit decides horizontal vs vertical axis
         const robotX = zp.robotHorizPos[i];
@@ -542,7 +584,7 @@ export function updateRobots(zp: ZeroPage, region: number): void {
           if (playerYHalf >= robotY) {
             setRobotWalkingDirection(zp, i, ROBOT_DOWN_ANIM_OFFSET);
           } else {
-            setRobotWalkingDirection(zp, i, ROBOT_UP_ANIM_OFFSET);
+            setRobotWalkingDirection(zp, i, ROBOT_UP_ANIM_OFFSET + 1);
           }
         } else {
           // Horizontal axis chosen by random bit
@@ -554,30 +596,57 @@ export function updateRobots(zp: ZeroPage, region: number): void {
           }
         }
       } else {
-        advanceRobotAnimation(zp, i);
+        zp.robotAnimationIndex[i] = RobotAnimationTableFlat[ROBOT_STAND_ANIM_OFFSET] ?? ROBOT_STAND_ANIM_OFFSET;
       }
-      // Re-read animation after direction was set
-      currentAnim = zp.robotAnimationIndex[i] & 0x1f;
+      continue;
     }
 
-    // Execute movement based on current walking direction (ROM-style, no wall checks for horizontal)
+    // Execute movement based on current walking direction.
     if (currentAnim >= ROBOT_LEFT_ANIM_OFFSET && currentAnim < ROBOT_RIGHT_ANIM_OFFSET) {
       // Walking left — if robot x > player x, move left; otherwise stand
       if (zp.robotHorizPos[i] > zp.playerHorizPos) {
-        zp.robotHorizPos[i]--;
-        advanceRobotAnimation(zp, i);
+        const nextX = zp.robotHorizPos[i] - 1;
+        if (isRobotPositionSafe(nextX, zp.robotVertPos[i], mazeOffset)) {
+          zp.robotHorizPos[i] = nextX;
+          advanceRobotAnimation(zp, i);
+        } else {
+          setRobotStanding(zp, i);
+        }
       } else {
         setRobotStanding(zp, i);
       }
     } else if (currentAnim >= ROBOT_RIGHT_ANIM_OFFSET && currentAnim < ROBOT_UP_ANIM_OFFSET) {
       // Walking right — if robot x < player x, move right; otherwise stand
       if (zp.robotHorizPos[i] < zp.playerHorizPos) {
-        zp.robotHorizPos[i]++;
-        advanceRobotAnimation(zp, i);
+        const nextX = zp.robotHorizPos[i] + 1;
+        if (isRobotPositionSafe(nextX, zp.robotVertPos[i], mazeOffset)) {
+          zp.robotHorizPos[i] = nextX;
+          advanceRobotAnimation(zp, i);
+        } else {
+          setRobotStanding(zp, i);
+        }
       } else {
         setRobotStanding(zp, i);
       }
     } else if (currentAnim >= ROBOT_UP_ANIM_OFFSET && currentAnim < ROBOT_DOWN_ANIM_OFFSET) {
+      const playerYTarget = (zp.playerVertPos >> 1) + 3;
+      if (playerYTarget === zp.robotVertPos[i]) {
+        setRobotStanding(zp, i);
+        continue;
+      }
+      if (playerYTarget > zp.robotVertPos[i]) {
+        if (zp.robotHorizPos[i] > zp.playerHorizPos) {
+          setRobotWalkingDirection(zp, i, ROBOT_LEFT_ANIM_OFFSET);
+        } else {
+          setRobotWalkingDirection(zp, i, ROBOT_RIGHT_ANIM_OFFSET);
+        }
+        continue;
+      }
+      if (currentAnim === ROBOT_UP_ANIM_OFFSET || currentAnim === ROBOT_UP_ANIM_OFFSET + 2) {
+        advanceRobotAnimation(zp, i);
+        continue;
+      }
+
       // Walking up — check robot-to-robot collision
       // ROM: if collision, redirect to horizontal (DetermineRobotMovement)
       if (checkRobotVerticalCollision(zp, i, false)) {
@@ -588,10 +657,25 @@ export function updateRobots(zp: ZeroPage, region: number): void {
           setRobotWalkingDirection(zp, i, ROBOT_RIGHT_ANIM_OFFSET);
         }
       } else {
-        zp.robotVertPos[i]--;
-        advanceRobotAnimation(zp, i);
+        const nextY = zp.robotVertPos[i] - 1;
+        if (isRobotPositionSafe(zp.robotHorizPos[i], nextY, mazeOffset)) {
+          zp.robotVertPos[i] = nextY;
+          advanceRobotAnimation(zp, i);
+        } else {
+          setRobotStanding(zp, i);
+        }
       }
     } else if (currentAnim >= ROBOT_DOWN_ANIM_OFFSET && currentAnim < ROBOT_DEATH_ANIM_OFFSET) {
+      const playerYHalf = zp.playerVertPos >> 1;
+      if (playerYHalf <= zp.robotVertPos[i]) {
+        if (zp.robotHorizPos[i] > zp.playerHorizPos) {
+          setRobotWalkingDirection(zp, i, ROBOT_LEFT_ANIM_OFFSET);
+        } else {
+          setRobotWalkingDirection(zp, i, ROBOT_RIGHT_ANIM_OFFSET);
+        }
+        continue;
+      }
+
       // Walking down — ROM gates movement at animation frames DOWN (19) and DOWN+2 (21)
       // Only moves at DOWN+1 (20) and DOWN+3 (22)
       if (currentAnim === ROBOT_DOWN_ANIM_OFFSET || currentAnim === ROBOT_DOWN_ANIM_OFFSET + 2) {
@@ -607,15 +691,22 @@ export function updateRobots(zp: ZeroPage, region: number): void {
             setRobotWalkingDirection(zp, i, ROBOT_RIGHT_ANIM_OFFSET);
           }
         } else {
-          zp.robotVertPos[i]++;
-          advanceRobotAnimation(zp, i);
+          const nextY = zp.robotVertPos[i] + 1;
+          if (isRobotPositionSafe(zp.robotHorizPos[i], nextY, mazeOffset)) {
+            zp.robotVertPos[i] = nextY;
+            advanceRobotAnimation(zp, i);
+          } else {
+            setRobotStanding(zp, i);
+          }
         }
       }
     }
 
-    // Clamp horizontal position
+    // Clamp position
     if (zp.robotHorizPos[i] < XMIN) zp.robotHorizPos[i] = XMIN;
     if (zp.robotHorizPos[i] > XMAX) zp.robotHorizPos[i] = XMAX;
+    if (zp.robotVertPos[i] < YMIN) zp.robotVertPos[i] = YMIN;
+    if (zp.robotVertPos[i] > 159) zp.robotVertPos[i] = 159;
   }
 }
 
@@ -662,7 +753,7 @@ function robotShoot(zp: ZeroPage, region: number): void {
     } else {
       dir = ROBOT_SHOOTING_UP;
     }
-    launchRobotMissile(zp, robotIdx, dir);
+    launchRobotMissile(zp, robotIdx, dir, region);
     return;
   }
 
@@ -678,11 +769,11 @@ function robotShoot(zp: ZeroPage, region: number): void {
     } else {
       dir = ROBOT_SHOOTING_RIGHT;
     }
-    launchRobotMissile(zp, robotIdx, dir);
+    launchRobotMissile(zp, robotIdx, dir, region);
   }
 }
 
-function launchRobotMissile(zp: ZeroPage, robotIdx: number, direction: number): void {
+function launchRobotMissile(zp: ZeroPage, robotIdx: number, direction: number, region: number): void {
   // Set robot back to standing when it fires
   if (zp.robotAnimationIndex[robotIdx] >= ROBOT_LEFT_ANIM_OFFSET) {
     zp.robotAnimationIndex[robotIdx] = ROBOT_STAND_ANIM_OFFSET;
@@ -693,14 +784,18 @@ function launchRobotMissile(zp: ZeroPage, robotIdx: number, direction: number): 
   // This prevents machine-gun shooting
   if (zp.robotMissileDelay > 0) return;
 
-  zp.robotMissileDelay = 0;
-
+  zp.robotMissileDelay = 0xff;
+  zp.robotMissileSoundIndex = 0xff;
   zp.robotMissileDirection = direction;
-  zp.robotMissileFlightTime = 0;
+  zp.robotMissileFlightTime = 1;
 
   // Set missile starting position from robot position
   zp.robotMissileVertPos = zp.robotVertPos[robotIdx] + InitRobotMissileYOffset[direction];
   zp.robotMissileHorizPos = zp.robotHorizPos[robotIdx] + InitRobotMissileXOffset[direction];
+
+  // LaunchRobotMissile falls through to DetermineMoveRobotMissile in the ROM,
+  // so a newly launched missile can move during the launch frame.
+  updateRobotMissile(zp, region);
 }
 
 /**
@@ -708,15 +803,6 @@ function launchRobotMissile(zp: ZeroPage, robotIdx: number, direction: number): 
  */
 function updateRobotMissile(zp: ZeroPage, region: number): void {
   if (zp.robotMissileDirection === 0) {
-    return;
-  }
-
-  zp.robotMissileFlightTime++;
-
-  // Check flight time limit
-  if (zp.robotMissileFlightTime > 100) {
-    zp.robotMissileDirection = 0;
-    zp.robotMissileDelay = 0; // Reset delay so next shot can fire
     return;
   }
 
@@ -728,8 +814,9 @@ function updateRobotMissile(zp: ZeroPage, region: number): void {
     const delayTable = getRobotMissileDelay(region);
     const tableIndex = ((gameLevel >> 1) & 7) as number;
     const delayValue = delayTable[tableIndex] ?? delayTable[0];
-    zp.robotMissileDelay = (zp.robotMissileDelay + delayValue) & 0xff;
-    if ((zp.robotMissileDelay >> 7) === 0) {
+    const sum = zp.robotMissileDelay + delayValue + (gameLevel & 1);
+    zp.robotMissileDelay = sum & 0xff;
+    if (sum <= 0xff) {
       // No carry — skip movement this frame
       return;
     }
@@ -744,29 +831,11 @@ function updateRobotMissile(zp: ZeroPage, region: number): void {
       zp.robotMissileHorizPos -= 2;
       break;
     case ROBOT_SHOOTING_DOWN:
-      zp.robotMissileVertPos += 2;
+      zp.robotMissileVertPos += 1;
       break;
     case ROBOT_SHOOTING_UP:
-      zp.robotMissileVertPos -= 2;
+      zp.robotMissileVertPos -= 1;
       break;
-  }
-
-  // Check bounds
-  if (zp.robotMissileHorizPos < XMIN || zp.robotMissileHorizPos > XMAX) {
-    zp.robotMissileDirection = 0;
-    zp.robotMissileDelay = 0; // Reset delay so next shot can fire
-    return;
-  }
-  if (zp.robotMissileVertPos < YMIN || zp.robotMissileVertPos >= (H_KERNEL - 8) / 2) {
-    zp.robotMissileDirection = 0;
-    zp.robotMissileDelay = 0; // Reset delay so next shot can fire
-    return;
-  }
-
-  // Check wall collision
-  if (isPositionInWall(zp.robotMissileHorizPos, zp.robotMissileVertPos, zp.mazeOffset ?? 0)) {
-    zp.robotMissileDirection = 0;
-    zp.robotMissileDelay = 0; // Reset delay so next shot can fire
   }
 }
 
@@ -774,82 +843,114 @@ function updateRobotMissile(zp: ZeroPage, region: number): void {
 // Evil Otto logic
 // -----------------------------------------------------------------------------
 
+/**
+ * Update Evil Otto — matches ASM CheckPlayerOttoCollision + DetermineEvilOttoParameters
+ * + DetermineEvilOttoMovement.
+ *
+ * ASM mapping:
+ * - CheckPlayerOttoCollision, lines 840-866: active when timer >= 3; even frames only;
+ *   horizontal box is Otto+7/player+7 and vertical box is Otto+H_PLAYER-1/player+H_PLAYER+8.
+ * - DetermineEvilOttoParameters, lines 1031-1056: even frames only; launch logic is gated by
+ *   robotVertPos+MAX_ROBOTS-2 == $7F and OTTO_INVINCIBLE|OTTO_REBOUND; timer increments only
+ *   when frameCount == 0, then Otto spawn/prev/temp/horiz are initialized from spawn tables.
+ * - DetermineEvilOttoMovement, lines 1059-1131: move only when robotVertPos[0] == $7F or
+ *   (robotMotionDelay ASL, ADC robotMotion) carries; bounce only after reaching tempOttoVertPos;
+ *   prev tracks player by net -2/+2; horizontal movement is one pixel toward player.
+ */
 function updateEvilOtto(zp: ZeroPage, region: number): void {
   // Skip if NO_OTTO flag is set
   if (zp.gameVariation & NO_OTTO) {
     return;
   }
 
-  // Otto launch timer — only matters while Otto hasn't launched yet
-  if (zp.kernelSection === OttoState.NOT_LAUNCHED) {
-    if (zp.evilOttoLaunchTimer === 0) {
-      // Start launch timer (~12 seconds = 720 frames at 60fps)
-      zp.evilOttoLaunchTimer = 200;
+  // ---- Launch sequence (ASM lines 1031-1056) ----
+  if ((zp.frameCount & 1) === 0 &&
+      zp.robotVertPos[MAX_ROBOTS - 2] === 0x7f &&
+      (zp.gameVariation & (OTTO_INVINCIBLE | OTTO_REBOUND))) {
+    if (zp.evilOttoLaunchTimer < 3) {
+      if (zp.frameCount === 0) {
+        zp.evilOttoLaunchTimer++;
+        zp.ottoVerticalDelta = 1;
+        const spawnLoc = zp.playerStartingLocation;
+        zp.evilOttoVertPos = InitVerticalPosition[spawnLoc];
+        zp.prevEvilOttoVertPos = zp.evilOttoVertPos;
+        zp.tempOttoVertPos = zp.evilOttoVertPos + 16;
+        zp.evilOttoHorizPos = InitHorizontalPosition[spawnLoc];
+      }
       return;
     }
-    zp.evilOttoLaunchTimer--;
-    if (zp.evilOttoLaunchTimer > 0) {
-      return; // Otto not yet launched
+
+    // ---- Otto movement (ASM DetermineEvilOttoMovement, lines 1059-1131) ----
+    const firstRobotOffScreen = zp.robotVertPos[0] === 0x7f;
+    const doubledDelay = (zp.robotMotionDelay << 1) & 0xff;
+    const carryFromAsl = zp.robotMotionDelay >= 0x80 ? 1 : 0;
+    const robotMotionSum = doubledDelay + zp.robotMotion + carryFromAsl;
+    const shouldMoveOtto = firstRobotOffScreen || robotMotionSum > 0xff;
+
+    if (shouldMoveOtto) {
+      zp.evilOttoVertPos += zp.ottoVerticalDelta;
+
+      if (zp.evilOttoVertPos >= zp.prevEvilOttoVertPos) {
+        if (zp.evilOttoVertPos >= zp.tempOttoVertPos) {
+          zp.ottoVerticalDelta = -4;
+
+          if (zp.prevEvilOttoVertPos < zp.playerVertPos) {
+            zp.prevEvilOttoVertPos += 4;
+          }
+          zp.prevEvilOttoVertPos -= 2;
+
+          let tempVert = zp.prevEvilOttoVertPos + 20;
+          const maxTemp = H_KERNEL - (H_PLAYER - 1) * 2;
+          if (tempVert > maxTemp) tempVert = maxTemp;
+          zp.tempOttoVertPos = tempVert;
+        }
+      } else {
+        zp.ottoVerticalDelta = 3;
+
+        if (zp.prevEvilOttoVertPos >= zp.playerVertPos) {
+          zp.ottoVerticalDelta = -4;
+        } else {
+          zp.prevEvilOttoVertPos += 4;
+        }
+        zp.prevEvilOttoVertPos -= 2;
+
+        let tempVert = zp.prevEvilOttoVertPos + 20;
+        const maxTemp = H_KERNEL - (H_PLAYER - 1) * 2;
+        if (tempVert > maxTemp) tempVert = maxTemp;
+        zp.tempOttoVertPos = tempVert;
+      }
+
+      // DetermineOttoPosition (ASM lines 1095-1103)
+      if (zp.ottoVerticalDelta >= 0 && zp.prevEvilOttoVertPos + 5 < zp.evilOttoVertPos) {
+        zp.evilOttoVertPos = zp.tempOttoVertPos;
+      }
+
+      // DetermineOttoHorizPosition (ASM lines 1107-1115)
+      if (zp.evilOttoHorizPos < zp.playerHorizPos) {
+        zp.evilOttoHorizPos++;
+      } else if (zp.evilOttoHorizPos > zp.playerHorizPos) {
+        zp.evilOttoHorizPos--;
+      }
     }
-    // Timer expired — transition to LAUNCHING (fall through to switch)
   }
 
-  // Otto is active
-  switch (zp.kernelSection) {
-    case OttoState.NOT_LAUNCHED:
-      // Check if Otto should start
-      if (zp.evilOttoLaunchTimer === 0) {
-        zp.kernelSection = OttoState.LAUNCHING;
-        zp.evilOttoVertPos = 0;
-        zp.evilOttoHorizPos = 0;
-        zp.ottoVerticalDelta = 1;
-      }
-      break;
+  // ---- Otto collision check (ASM lines 840-870) ----
+  // Only check if Otto has launched
+  if (zp.evilOttoLaunchTimer >= 3) {
+    // Only check on even frames (ASM: frameCount ror → branch if odd)
+    if ((zp.frameCount & 1) === 0) {
+      // Check if Otto overlaps player in 7px box
+      const playerTop = zp.playerVertPos - (H_PLAYER - 1);
+      const playerBottom = zp.playerVertPos + H_PLAYER + 8;
 
-    case OttoState.LAUNCHING:
-      // Move Otto down from top
-      zp.evilOttoVertPos += zp.ottoVerticalDelta;
-      if (zp.evilOttoVertPos >= 60) {
-        zp.kernelSection = OttoState.BOUNCING;
-        zp.ottoVerticalDelta = 1;
+      if (zp.evilOttoHorizPos >= zp.playerHorizPos - 7 &&
+          zp.evilOttoHorizPos <= zp.playerHorizPos + 7 &&
+          zp.evilOttoVertPos >= playerTop &&
+          zp.evilOttoVertPos <= playerBottom) {
+        // Otto collision — kill player
+        triggerPlayerDeath(zp);
       }
-      break;
-
-    case OttoState.BOUNCING:
-      // Otto bounces vertically
-      zp.evilOttoVertPos += zp.ottoVerticalDelta;
-
-      // Bounce off top/bottom
-      if (zp.evilOttoVertPos <= 40) {
-        zp.ottoVerticalDelta = 1;
-      }
-      if (zp.evilOttoVertPos >= 120) {
-        zp.ottoVerticalDelta = -1;
-      }
-
-      // Check if Otto has reached player's Y level
-      if (Math.abs(zp.evilOttoVertPos - zp.playerVertPos) < 10) {
-        zp.kernelSection = OttoState.TRACKING;
-      }
-      break;
-
-    case OttoState.TRACKING:
-      // Otto tracks player horizontally
-      zp.prevEvilOttoVertPos = zp.evilOttoVertPos;
-
-      if (zp.evilOttoHorizPos < zp.playerHorizPos) {
-        zp.evilOttoHorizPos += 1;
-      } else if (zp.evilOttoHorizPos > zp.playerHorizPos) {
-        zp.evilOttoHorizPos -= 1;
-      }
-
-      // Move vertically toward player
-      if (zp.evilOttoVertPos < zp.playerVertPos) {
-        zp.evilOttoVertPos += 1;
-      } else if (zp.evilOttoVertPos > zp.playerVertPos) {
-        zp.evilOttoVertPos -= 1;
-      }
-      break;
+    }
   }
 }
 
@@ -857,44 +958,35 @@ function updateEvilOtto(zp: ZeroPage, region: number): void {
 // Player logic
 // -----------------------------------------------------------------------------
 
-function updatePlayer(zp: ZeroPage, region: number, wasShooting: boolean, frame: number): void {
+function updatePlayer(
+  zp: ZeroPage,
+  region: number,
+  wasShooting: boolean,
+  frame: number,
+  movementInput: number,
+): void {
   // Skip if player is dying or exiting
   if (
-    zp.playerAnimationIndex === PLAYER_DEATH_ANIM_OFFSET ||
+    zp.playerAnimationIndex >= PLAYER_DEATH_ANIM_OFFSET ||
     zp.playerAnimationIndex === PlayerAnimState.EXITING
   ) {
     return;
   }
 
-  // Determine player animation state
+  // Determine player animation state.
+  // ROM behavior:
+  // - no movement: force standing and reset fractional motion
+  // - firing: reset fractional motion, but visual firing pose is derived at render time
+  // - movement animation advances only when the fractional accumulator overflows
   const isShooting = wasShooting;
   const isMoving =
-    (zp.playerDirection & (MOVE_UP | MOVE_DOWN | MOVE_LEFT | MOVE_RIGHT)) !== 0;
+    (movementInput & (MOVE_UP | MOVE_DOWN | MOVE_LEFT | MOVE_RIGHT)) !== 0;
 
-  // Update player animation — alternate running frames via bit 0
-  if (isShooting) {
-    let shootAnimIndex: number;
-    switch (zp.playerDirection & 0x0f) {
-      case MOVE_UP:
-        shootAnimIndex = 2;
-        break;
-      case MOVE_DOWN:
-        shootAnimIndex = 3;
-        break;
-      default:
-        shootAnimIndex = 0;
-        break;
-    }
-    zp.playerAnimationIndex = PlayerShootingAnimationTable[shootAnimIndex] ?? 0;
-  } else if (isMoving) {
-    // Toggle between running0 (bit0=0) and running1 (bit0=1)
-    zp.playerAnimationIndex ^= 1;
-    // Prevent the toggle from accidentally landing on the death animation index
-    if (zp.playerAnimationIndex === PLAYER_DEATH_ANIM_OFFSET) {
-      zp.playerAnimationIndex ^= 1;
-    }
-  } else {
+  if (!isMoving) {
     zp.playerAnimationIndex = PLAYER_STAND_ANIM_OFFSET;
+    zp.playerMotion = 0;
+  } else if (isShooting) {
+    zp.playerMotion = 0;
   }
 
   // Player movement — ASM fractional accumulator:
@@ -905,19 +997,24 @@ function updatePlayer(zp: ZeroPage, region: number, wasShooting: boolean, frame:
   zp.playerMotion = sum & 0xff;
 
   if (sum > 0xff) {
+    zp.playerAnimationIndex--;
+    if (zp.playerAnimationIndex < 0) {
+      zp.playerAnimationIndex = PLAYER_RUN_ANIM_OFFSET + 1;
+    }
+
     // Horizontal movement
-    if (zp.playerDirection & MOVE_RIGHT) {
+    if (movementInput & MOVE_RIGHT) {
       zp.playerHorizPos += 1;
     }
-    if (zp.playerDirection & MOVE_LEFT) {
+    if (movementInput & MOVE_LEFT) {
       zp.playerHorizPos -= 1;
     }
 
     // Vertical movement
-    if (zp.playerDirection & MOVE_DOWN) {
+    if (movementInput & MOVE_DOWN) {
       zp.playerVertPos += 1;
     }
-    if (zp.playerDirection & MOVE_UP) {
+    if (movementInput & MOVE_UP) {
       zp.playerVertPos -= 1;
     }
 
@@ -929,16 +1026,13 @@ function updatePlayer(zp: ZeroPage, region: number, wasShooting: boolean, frame:
     // Also verify the exit point is not blocked by a wall (prevents
     // the player from triggering an exit by walking through a wall).
     const mazeOff = zp.mazeOffset ?? 0;
-    const atLeftExit  = zp.playerHorizPos === 0 &&
-                        !isPositionInWall(0, zp.playerVertPos, mazeOff);
-    const atRightExit = zp.playerHorizPos >= XMAX_PLAYER &&
-                        !isPositionInWall(XMAX_PLAYER, zp.playerVertPos, mazeOff);
-    const atTopExit   = zp.playerVertPos < YMIN + 2 &&
-                        !isPositionInWall(zp.playerHorizPos, 0, mazeOff);
-    const atBottomExit= zp.playerVertPos >= H_KERNEL - H_PLAYER * 2 &&
-                        !isPositionInWall(zp.playerHorizPos, 159, mazeOff);
+    const exitDirection = getRoomExitDirection(zp);
+    const atLeftExit = exitDirection === PLAYER_ENTERING_WEST && !isPositionInWall(0, zp.playerVertPos, mazeOff);
+    const atRightExit = exitDirection === PLAYER_ENTERING_EAST && !isPositionInWall(XMAX_PLAYER, zp.playerVertPos, mazeOff);
+    const atTopExit = exitDirection === PLAYER_ENTERING_NORTH && !isPositionInWall(zp.playerHorizPos, 0, mazeOff);
+    const atBottomExit = exitDirection === PLAYER_ENTERING_SOUTH && !isPositionInWall(zp.playerHorizPos, 159, mazeOff);
 
-    const triggered = atLeftExit || atRightExit || atTopExit || atBottomExit;
+    const triggered = exitDirection !== null && (atLeftExit || atRightExit || atTopExit || atBottomExit);
     gameLogger.log("EXIT_CHECK", {
       room: zp.gameLevel,
       playerX: zp.playerHorizPos,
@@ -952,7 +1046,7 @@ function updatePlayer(zp: ZeroPage, region: number, wasShooting: boolean, frame:
     }, frame);
 
     if (triggered) {
-      setupRoomExit(zp, frame);
+      setupRoomExit(zp, exitDirection, frame);
       return;
     }
   }
@@ -962,81 +1056,32 @@ function updatePlayer(zp: ZeroPage, region: number, wasShooting: boolean, frame:
 // Player missile logic
 // -----------------------------------------------------------------------------
 
-function firePlayerMissile(zp: ZeroPage, joystickInput: number): void {
-  if (zp.playerMissileDirection !== 0) {
+function firePlayerMissile(zp: ZeroPage): void {
+  if (zp.playerMissileFlightTime !== 0) {
     return; // already firing
   }
 
-  // Determine direction from joystick
-  let direction = 0;
-  if (joystickInput & MOVE_UP) {
-    direction = ROBOT_SHOOTING_UP;
-  } else if (joystickInput & MOVE_DOWN) {
-    direction = ROBOT_SHOOTING_DOWN;
-  } else if (joystickInput & MOVE_RIGHT) {
-    direction = ROBOT_SHOOTING_RIGHT;
-  } else if (joystickInput & MOVE_LEFT) {
-    direction = ROBOT_SHOOTING_LEFT;
-  }
+  const direction = zp.playerDirection & 0x0f;
+  if (direction === 0) return;
 
-  if (direction === 0) {
-    return;
-  }
-
+  // ASM launch path: NextRandom, inc playerMissileFlightTime, store the raw
+  // playerDirection nibble, then seed X and 2LK Y positions from direction tables.
+  nextRandom(zp);
+  zp.playerMissileFlightTime = 1;
   zp.playerMissileDirection = direction;
-  zp.playerMissileFlightTime = 0;
-
-  // Set missile starting position based on direction
-  const yIndex = direction;
-  const xIndex = direction;
-  zp.playerMissileVertPos = zp.playerVertPos + InitMissileYOffsetTable[yIndex];
-  zp.playerMissileHorizPos = zp.playerHorizPos + InitMissileXOffsetTable[xIndex];
+  zp.playerMissileHorizPos = zp.playerHorizPos + (InitMissileXOffsetTable[direction] ?? 0);
+  zp.playerMissileVertPos = (zp.playerVertPos >> 1) + (InitMissileYOffsetTable[direction] ?? 0);
+  zp.audioIndex = 0xff;
 }
 
 function updatePlayerMissile(zp: ZeroPage): void {
-  if (zp.playerMissileDirection === 0) {
+  if (zp.playerMissileFlightTime === 0 || zp.playerMissileDirection === 0) {
     return;
   }
 
-  zp.playerMissileFlightTime++;
-
-  // Check flight time limit
-  if (zp.playerMissileFlightTime > 50) {
-    zp.playerMissileDirection = 0;
-    return;
-  }
-
-  // Move missile based on direction
-  // ASM: horizontal uses HorizontalPixelOffsets (±1 * 2 = ±2), vertical uses VerticalPixelOffsets (±1)
-  switch (zp.playerMissileDirection) {
-    case ROBOT_SHOOTING_RIGHT:
-      zp.playerMissileHorizPos += 2;
-      break;
-    case ROBOT_SHOOTING_LEFT:
-      zp.playerMissileHorizPos -= 2;
-      break;
-    case ROBOT_SHOOTING_DOWN:
-      zp.playerMissileVertPos += 1;
-      break;
-    case ROBOT_SHOOTING_UP:
-      zp.playerMissileVertPos -= 1;
-      break;
-  }
-
-  // Check bounds
-  if (zp.playerMissileHorizPos < XMIN || zp.playerMissileHorizPos > XMAX) {
-    zp.playerMissileDirection = 0;
-    return;
-  }
-  if (zp.playerMissileVertPos < YMIN || zp.playerMissileVertPos >= (H_KERNEL - 8) / 2) {
-    zp.playerMissileDirection = 0;
-    return;
-  }
-
-  // Check wall collision — missile stops at maze walls
-  if (isPositionInWall(zp.playerMissileHorizPos, zp.playerMissileVertPos, zp.mazeOffset ?? 0)) {
-    zp.playerMissileDirection = 0;
-  }
+  const direction = zp.playerMissileDirection & 0x0f;
+  zp.playerMissileVertPos += VerticalPixelOffsets[direction] ?? 0;
+  zp.playerMissileHorizPos += (HorizontalPixelOffsets[direction] ?? 0) * 2;
 }
 
 // -----------------------------------------------------------------------------
@@ -1148,10 +1193,11 @@ function isMissileInMazeWall(x: number, y: number, mazeOffset: number): boolean 
  * Trigger player death with audio (ASM: .playerHarmfulCollision)
  */
 function triggerPlayerDeath(zp: ZeroPage): void {
-  if (zp.playerAnimationIndex === PLAYER_DEATH_ANIM_OFFSET) return; // already dying
+  if (zp.playerAnimationIndex >= PLAYER_DEATH_ANIM_OFFSET) return; // already dying
   zp.playerAnimationIndex = PLAYER_DEATH_ANIM_OFFSET;
   zp.audioIndex = 8;
-  zp.playerMotion = 0; // start death animation timer
+  // Sentinel so the newly-triggered death state does not advance until next tick.
+  zp.playerMotion = 0xff;
 }
 
 /**
@@ -1209,7 +1255,7 @@ function checkMissileCollisions(zp: ZeroPage): void {
   if (zp.playerMissileDirection === 0 || zp.playerMissileDirection === 0x0f) return;
 
   // Don't award points if player is dead (death animation started)
-  if (zp.playerAnimationIndex === PLAYER_DEATH_ANIM_OFFSET) return;
+  if (zp.playerAnimationIndex >= PLAYER_DEATH_ANIM_OFFSET) return;
 
   // Player missile vs robots (CXM0P bit 7)
   for (let i = 0; i < MAX_ROBOTS; i++) {
@@ -1225,16 +1271,7 @@ function checkMissileCollisions(zp: ZeroPage): void {
       zp.playerMissileFlightTime = 0;
       zp.numberRobotsKilled++;
 
-      incrementScore(zp, 50);
-
-      if (zp.numberRobotsKilled % 20 === 0) {
-        if (zp.gameVariation & EXTRA_LIFE_2000) {
-          incrementScore(zp, 2000);
-        } else if (zp.gameVariation & EXTRA_LIFE_1000) {
-          incrementScore(zp, 1000);
-        }
-        zp.numberOfLives++;
-      }
+      incrementScoreBCD(zp, SHOOTING_ROBOT_SCORE);
       break;
     }
   }
@@ -1340,65 +1377,58 @@ function checkPlayerWallCollisions(zp: ZeroPage, frame: number): void {
 // Score increment (BCD arithmetic)
 // -----------------------------------------------------------------------------
 
-function incrementScore(zp: ZeroPage, amount: number): void {
-  // Extract individual BCD digits from amount.
-  // amount can be > 999 (e.g. 2000), so we handle carries from hundreds → thousands.
-  const ones = amount % 10;
-  const tens = Math.floor((amount % 100) / 10);
-  const hundreds = Math.floor(amount / 100) % 10;
-  const thousands = Math.floor(amount / 1000);
-
-  // Add ones digit
-  zp.playerScore0 += ones;
-  let carryTens = 0;
-  if (zp.playerScore0 >= 10) {
-    zp.playerScore0 -= 10;
-    carryTens = 1;
+function bcdAddByte(value: number, amount: number, carryIn: number): { value: number; carry: number } {
+  let low = (value & 0x0f) + (amount & 0x0f) + carryIn;
+  let carry = 0;
+  if (low > 9) {
+    low -= 10;
+    carry = 1;
   }
 
-  // Add tens digit + carry
-  zp.playerScore1 += tens + carryTens;
-  let carryHundreds = 0;
-  if (zp.playerScore1 >= 10) {
-    zp.playerScore1 -= 10;
-    carryHundreds = 1;
+  let high = ((value >> 4) & 0x0f) + ((amount >> 4) & 0x0f) + carry;
+  carry = 0;
+  if (high > 9) {
+    high -= 10;
+    carry = 1;
   }
 
-  // Add hundreds digit + carry + thousands
-  zp.playerScore2 += hundreds + carryHundreds + thousands;
-  zp.playerScore2 %= 10;
+  return { value: ((high << 4) | low) & 0xff, carry };
 }
 
 /**
- * Increment score by a BCD value with carry handling.
- * This matches the ASM IncrementScore subroutine.
+ * Increment score by a one-byte BCD value using the ASM's 3-byte packed BCD layout.
+ * playerScore0/playerScore1/playerScore2 mirror playerScore/playerScore+1/playerScore+2.
  */
 function incrementScoreBCD(zp: ZeroPage, bcdAmount: number): void {
+  const oldMiddleScoreByte = zp.playerScore1;
+  const score = [zp.playerScore0, zp.playerScore1, zp.playerScore2];
+  let amount = bcdAmount & 0xff;
   let carry = 0;
 
-  // Add ones place
-  let ones = (bcdAmount & 0x0f) + zp.playerScore0 + carry;
-  if (ones >= 10) {
-    ones -= 10;
-    carry = 1;
-  } else {
-    carry = 0;
+  for (let y = 2; y >= 0; y--) {
+    const result = bcdAddByte(score[y], amount, carry);
+    score[y] = result.value;
+    carry = result.carry;
+    amount = 0;
   }
-  zp.playerScore0 = ones;
 
-  // Add tens place
-  let tens = ((bcdAmount >> 4) & 0x0f) + zp.playerScore1 + carry;
-  if (tens >= 10) {
-    tens -= 10;
-    carry = 1;
-  } else {
-    carry = 0;
+  zp.playerScore0 = score[0];
+  zp.playerScore1 = score[1];
+  zp.playerScore2 = score[2];
+
+  if (zp.gameVariation & EXTRA_LIFE_1000) {
+    if ((oldMiddleScoreByte & 0x0f) === 0x09 && oldMiddleScoreByte !== zp.playerScore1) {
+      zp.gameState = 0x03;
+      zp.numberOfLives++;
+    }
+  } else if (zp.gameVariation & EXTRA_LIFE_2000) {
+    if ((oldMiddleScoreByte & 0x1f) === 0x19 &&
+        (oldMiddleScoreByte & 0x0f) === 0x09 &&
+        oldMiddleScoreByte !== zp.playerScore1) {
+      zp.gameState = 0x03;
+      zp.numberOfLives++;
+    }
   }
-  zp.playerScore1 = tens;
-
-  // Add hundreds place
-  let hundreds = ((bcdAmount >> 8) & 0x0f) + zp.playerScore2 + carry;
-  zp.playerScore2 = hundreds & 0x0f;
 }
 
 // -----------------------------------------------------------------------------
@@ -1473,7 +1503,7 @@ export interface GameStateMachine {
 
 export function createGameStateMachine(region: number = NTSC): GameStateMachine {
   const zp = createZeroPage();
-  initGame(zp, zp.gameSelection, zp.region);
+  initGame(zp, 0, region);
 
   return {
     zp,
@@ -1495,16 +1525,22 @@ export function tick(state: GameStateMachine): void {
   const { zp, region } = state;
 
   state.frameCount++;
+  zp.frameCount = state.frameCount & 0xff;
+
+  // Keep the ROM-style RNG advancing every frame so robot selection,
+  // room changes, and AI axis choices do not get stuck on a stale seed.
+  nextRandom(zp);
 
   // Room exit transition (ASM: VBLANK handles SetupForPlayerExitingRoom when gameState == $FF)
   if (zp.gameState === 0xff) {
     const fromRoom = zp.gameLevel;
-    // Adjust playfield limits based on exit direction
+    // Adjust playfield limits based on exit direction.
+    // North/south use vertical close; west/east use horizontal close.
     const exitDir = zp.tempPlayerExitingPos;
-    if (exitDir !== PLAYER_ENTERING_SOUTH) {
+    if (exitDir === PLAYER_ENTERING_NORTH || exitDir === PLAYER_ENTERING_WEST) {
       zp.upperPlayfieldLimit++;
     }
-    if (exitDir !== PLAYER_ENTERING_NORTH) {
+    if (exitDir === PLAYER_ENTERING_SOUTH || exitDir === PLAYER_ENTERING_EAST) {
       zp.lowerPlayfieldLimit--;
     }
 
@@ -1523,6 +1559,21 @@ export function tick(state: GameStateMachine): void {
 
     // Still in transition — skip normal game logic
     return;
+  }
+
+  // Room opening reveal for the newly entered screen.
+  if (zp.upperPlayfieldLimit !== 0 || zp.lowerPlayfieldLimit !== H_KERNEL / 2) {
+    const entryDir = zp.playerStartingLocation;
+    if (entryDir === PLAYER_ENTERING_NORTH || entryDir === PLAYER_ENTERING_WEST) {
+      zp.lowerPlayfieldLimit = Math.min(H_KERNEL / 2, zp.lowerPlayfieldLimit + 1);
+    }
+    if (entryDir === PLAYER_ENTERING_SOUTH || entryDir === PLAYER_ENTERING_EAST) {
+      zp.upperPlayfieldLimit = Math.max(0, zp.upperPlayfieldLimit - 1);
+    }
+
+    if (zp.upperPlayfieldLimit > zp.lowerPlayfieldLimit) {
+      zp.upperPlayfieldLimit = zp.lowerPlayfieldLimit;
+    }
   }
 
   // VBLANK: clear state, update attract timer
@@ -1556,8 +1607,18 @@ export function tick(state: GameStateMachine): void {
     updateColorCycling(zp);
   }
 
-  // Capture shooting state at the START of the tick (before missile updates clear it)
-  const shootingAtStart = zp.playerMissileDirection !== 0;
+  // ASM ReadJoystickValues only writes playerDirection when movement bits are
+  // pressed. Releasing the stick preserves facing for fire pose/missile launch.
+  const joystickDirection = state.joystickInput & 0x0f;
+  if (joystickDirection !== 0) {
+    zp.playerDirection = joystickDirection;
+  }
+
+  const fireHeld = (state.joystickInput & 0x10) !== 0;
+  const shootingAtStart = zp.playerMissileFlightTime !== 0;
+  if (fireHeld) {
+    firePlayerMissile(zp);
+  }
 
   // Update player missile
   updatePlayerMissile(zp);
@@ -1574,21 +1635,13 @@ export function tick(state: GameStateMachine): void {
   // Update Evil Otto
   updateEvilOtto(zp, region);
 
-  // Update player direction from joystick (before movement)
-  zp.playerDirection = state.joystickInput & 0x0f;
-
-  // Fire player missile (on edge detection) — before updatePlayer so animation reflects shooting
-  const firePressed = (state.joystickInput & 0x10) && !(state.lastJoystickInput & 0x10);
-  if (firePressed) {
-    firePlayerMissile(zp, state.joystickInput);
-  }
   state.lastJoystickInput = state.joystickInput;
 
   // Determine if player is shooting: was shooting at start OR just fired this tick
-  const isShooting = shootingAtStart || zp.playerMissileDirection !== 0;
+  const isShooting = shootingAtStart || fireHeld || zp.playerMissileFlightTime !== 0;
 
   // Update player movement
-  updatePlayer(zp, region, isShooting, state.frameCount);
+  updatePlayer(zp, region, isShooting, state.frameCount, joystickDirection);
 
   // Check player vs playfield walls (ASM: CXP0FB collision)
   checkPlayerWallCollisions(zp, state.frameCount);
@@ -1602,10 +1655,15 @@ export function tick(state: GameStateMachine): void {
   // Check player missile vs robots/Otto
   checkMissileCollisions(zp);
 
-  // Handle player death
-  if (zp.playerAnimationIndex === PLAYER_DEATH_ANIM_OFFSET && zp.playerMissileDirection === 0) {
-    // Check if death animation is complete (simplified: 30 frames)
-    if (zp.playerMotion > 30) {
+  // Handle player death using the ROM-style animation counter.
+  // While the value is >= PLAYER_DEATH_ANIM_OFFSET and still positive signed,
+  // the death animation advances. Once bit 7 is set, the next frame consumes a life.
+  if (zp.playerAnimationIndex >= PLAYER_DEATH_ANIM_OFFSET) {
+    if (zp.playerMotion === 0xff) {
+      zp.playerMotion = 0;
+    } else if ((zp.playerAnimationIndex & 0x80) === 0) {
+      zp.playerAnimationIndex = (zp.playerAnimationIndex + 1) & 0xff;
+    } else {
       zp.numberOfLives--;
       if (zp.numberOfLives <= 0) {
         // Game over

@@ -133,10 +133,10 @@ export interface ZeroPage {
   // $DC - gameLevel
   gameLevel: number;
 
-  // $DD-$DF - playerScore (3 BCD digits)
-  playerScore0: number; // ones
-  playerScore1: number; // tens
-  playerScore2: number; // hundreds
+  // $DD-$DF - playerScore (3 packed BCD bytes, high/mid/low = 6 display digits)
+  playerScore0: number; // high byte: hundred-thousands / ten-thousands
+  playerScore1: number; // middle byte: thousands / hundreds
+  playerScore2: number; // low byte: tens / ones
 
   // $E0 - robotMotionDelay
   robotMotionDelay: number;

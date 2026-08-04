@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:visual": "vitest run src/tests/visual-reference.test.ts src/tests/visual-critic-loops.test.ts src/tests/transition-visual-critic.test.ts src/tests/maze-visual-critic.test.ts"
   },
   "keywords": [],
   "author": "",

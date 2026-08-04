@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createZeroPage } from "../tia/zeropage";
-import { initGame, tick, GameStateMachine, GameState, OttoState, isPositionInWall, PLAYER_ENTERING_SOUTH } from "../game";
+import { initGame, tick, GameStateMachine, GameState, OttoState, isPositionInWall } from "../game";
 import {
   NTSC,
   PAL,
@@ -24,15 +24,28 @@ import {
   XMAX,
   XMAX_PLAYER,
   H_KERNEL,
+  H_PLAYER,
+  MAX_ROBOTS,
   ROBOT_STAND_ANIM_OFFSET,
   ROBOT_DEATH_ANIM_OFFSET,
   OTTO_INVINCIBLE,
+  OTTO_REBOUND,
   NO_OTTO,
   EXTRA_LIFE_2000,
   EXTRA_LIFE_1000,
   ROBOT_SHOOTING,
   ROBOT_SHOOTING_RIGHT,
+  MOVE_LEFT,
+  MOVE_RIGHT,
+  MOVE_DOWN,
+  XROBOT_MISSILE_BOX,
+  YROBOT_MISSILE_BOX,
+  PLAYER_ENTERING_NORTH,
+  PLAYER_ENTERING_SOUTH,
+  PLAYER_ENTERING_WEST,
+  PLAYER_ENTERING_EAST,
 } from "../constants";
+import { InitHorizontalPosition, InitVerticalPosition } from "../data/tables";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -64,95 +77,294 @@ function buildStateMachine(
 // ---------------------------------------------------------------------------
 
 describe("updateEvilOtto (via tick)", () => {
+  function enableOtto(zp: ReturnType<typeof createZeroPage>): void {
+    zp.gameVariation = OTTO_REBOUND;
+    zp.robotVertPos[MAX_ROBOTS - 2] = 0x7f;
+  }
+
   it("skips when NO_OTTO flag is set", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
-    zp.gameVariation = NO_OTTO;
+    zp.gameVariation |= NO_OTTO;
+    zp.robotVertPos[MAX_ROBOTS - 2] = 0x7f;
     const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 255;
 
     tick(gsm);
-    tick(gsm);
 
-    // evilOttoLaunchTimer should remain at 0 (never set)
     expect(zp.evilOttoLaunchTimer).toBe(0);
   });
 
-  it("increments launch timer from 0", () => {
+  it("only increments launch timer when frameCount rolls to zero and ASM Otto gates are true", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
-    // Clear NO_OTTO flag so updateEvilOtto actually runs
-    zp.gameVariation &= ~0x08;
+    enableOtto(zp);
     const gsm = buildStateMachine(zp, NTSC);
+
+    tick(gsm);
+    expect(zp.frameCount).toBe(1);
     expect(zp.evilOttoLaunchTimer).toBe(0);
 
-    tick(gsm); // sets to 200
-
-    expect(zp.evilOttoLaunchTimer).toBe(200);
+    gsm.frameCount = 255;
+    tick(gsm);
+    expect(zp.frameCount).toBe(0);
+    expect(zp.evilOttoLaunchTimer).toBe(1);
+    expect(zp.evilOttoVertPos).toBe(8);
+    expect(zp.prevEvilOttoVertPos).toBe(8);
+    expect(zp.tempOttoVertPos).toBe(24);
+    expect(zp.evilOttoHorizPos).toBe(73);
   });
 
-  it("decrements launch timer until Otto launches", () => {
+  it("does not increment launch timer without the robotVertPos+MAX_ROBOTS-2 off-screen gate", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
-    // Clear NO_OTTO flag so updateEvilOtto actually runs
-    zp.gameVariation &= ~0x08;
-    // Skip past the launch timer by setting it to 1
-    zp.evilOttoLaunchTimer = 1;
+    zp.gameVariation = OTTO_REBOUND;
+    zp.robotVertPos[MAX_ROBOTS - 2] = 40;
     const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 255;
 
-    tick(gsm); // decrements to 0, triggers launch
+    tick(gsm);
 
-    // Otto should be in LAUNCHING state
-    expect(zp.kernelSection).toBe(OttoState.LAUNCHING);
-    expect(zp.evilOttoVertPos).toBe(0);
-    expect(zp.evilOttoHorizPos).toBe(0);
+    expect(zp.evilOttoLaunchTimer).toBe(0);
   });
 
-  it("launches Otto down during VBLANK and transitions to BOUNCING", () => {
+  it("does not increment launch timer without OTTO_REBOUND or OTTO_INVINCIBLE", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
-    // Clear NO_OTTO flag so updateEvilOtto actually runs
-    zp.gameVariation &= ~0x08;
-    // Skip launch by setting launchTimer to 0 and kernel to VBLANK
-    zp.evilOttoLaunchTimer = 0;
-    zp.kernelSection = GameState.VBLANK;
+    zp.gameVariation = ROBOT_SHOOTING;
+    zp.robotVertPos[MAX_ROBOTS - 2] = 0x7f;
     const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 255;
 
-    // First tick: launch Otto (set to 200 first frame, then next frame launch)
-    tick(gsm); // sets timer to 200
-    // Fast-forward: set timer to 1 and tick again to trigger launch
-    zp.evilOttoLaunchTimer = 1;
-    tick(gsm); // Otto launches, kernelSection = LAUNCHING, vertPos=0
+    tick(gsm);
 
-    // Simulate multiple ticks to move Otto down past 60
-    for (let i = 0; i < 60; i++) {
+    expect(zp.evilOttoLaunchTimer).toBe(0);
+  });
+
+  it("launches Otto from the same doorway where the player entered", () => {
+    const entries = [
+      PLAYER_ENTERING_NORTH,
+      PLAYER_ENTERING_SOUTH,
+      PLAYER_ENTERING_WEST,
+      PLAYER_ENTERING_EAST,
+    ];
+
+    for (const entryDir of entries) {
+      const zp = createZeroPage();
+      initGame(zp, 0, NTSC);
+      enableOtto(zp);
+      zp.playerStartingLocation = entryDir;
+      zp.evilOttoLaunchTimer = 2;
+      const gsm = buildStateMachine(zp, NTSC);
+      gsm.frameCount = 255;
+
       tick(gsm);
-    }
 
-    // After ~60 ticks, Otto should transition to BOUNCING
-    expect(zp.kernelSection).toBe(OttoState.BOUNCING);
+      expect(zp.evilOttoLaunchTimer).toBe(3);
+      expect(zp.ottoVerticalDelta).toBe(1);
+      expect(zp.evilOttoVertPos).toBe(InitVerticalPosition[entryDir]);
+      expect(zp.prevEvilOttoVertPos).toBe(InitVerticalPosition[entryDir]);
+      expect(zp.tempOttoVertPos).toBe(InitVerticalPosition[entryDir] + 16);
+      expect(zp.evilOttoHorizPos).toBe(InitHorizontalPosition[entryDir]);
+    }
   });
 
-  it("tracks player horizontally in TRACKING state", () => {
+  it("moves Otto down one pixel before tempOttoVertPos without changing delta or prev", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
-    // Clear NO_OTTO flag so updateEvilOtto actually runs
-    zp.gameVariation &= ~0x08;
-    zp.kernelSection = OttoState.BOUNCING;
-    zp.evilOttoLaunchTimer = 100; // already launched, timer won't interfere
+    enableOtto(zp);
+    zp.initRobotDelay = 0;
+    zp.evilOttoLaunchTimer = 3;
+    zp.evilOttoVertPos = 8;
+    zp.prevEvilOttoVertPos = 8;
+    zp.tempOttoVertPos = 24;
+    zp.ottoVerticalDelta = 1;
     zp.evilOttoHorizPos = 50;
-    zp.evilOttoVertPos = 80; // same as player
+    zp.playerHorizPos = 60;
+    zp.playerVertPos = 8;
+    zp.robotVertPos[0] = 0x7f;
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 1;
+
+    tick(gsm);
+
+    expect(zp.evilOttoVertPos).toBe(9);
+    expect(zp.prevEvilOttoVertPos).toBe(8);
+    expect(zp.tempOttoVertPos).toBe(24);
+    expect(zp.ottoVerticalDelta).toBe(1);
+    expect(zp.evilOttoHorizPos).toBe(51);
+  });
+
+  it("snaps Otto to tempOttoVertPos while moving down after passing prev+5", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    enableOtto(zp);
+    zp.initRobotDelay = 0;
+    zp.evilOttoLaunchTimer = 3;
+    zp.evilOttoVertPos = 14;
+    zp.prevEvilOttoVertPos = 8;
+    zp.tempOttoVertPos = 24;
+    zp.ottoVerticalDelta = 1;
+    zp.evilOttoHorizPos = 50;
+    zp.playerHorizPos = 50;
+    zp.playerVertPos = 8;
+    zp.robotVertPos[0] = 0x7f;
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 1;
+
+    tick(gsm);
+
+    expect(zp.evilOttoVertPos).toBe(24);
+    expect(zp.prevEvilOttoVertPos).toBe(8);
+    expect(zp.tempOttoVertPos).toBe(24);
+    expect(zp.ottoVerticalDelta).toBe(1);
+  });
+
+  it("bounces Otto upward after reaching tempOttoVertPos and updates prev/temp", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    enableOtto(zp);
+    zp.initRobotDelay = 0;
+    zp.evilOttoLaunchTimer = 3;
+    zp.evilOttoVertPos = 23;
+    zp.prevEvilOttoVertPos = 8;
+    zp.tempOttoVertPos = 24;
+    zp.ottoVerticalDelta = 1;
+    zp.evilOttoHorizPos = 50;
+    zp.playerHorizPos = 50;
+    zp.playerVertPos = 12;
+    zp.robotVertPos[0] = 0x7f;
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 1;
+
+    tick(gsm);
+
+    expect(zp.evilOttoVertPos).toBe(24);
+    expect(zp.prevEvilOttoVertPos).toBe(10);
+    expect(zp.tempOttoVertPos).toBe(30);
+    expect(zp.ottoVerticalDelta).toBe(-4);
+  });
+
+  it("does not move Otto when the robot motion ASL/ADC sequence does not carry", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    enableOtto(zp);
+    zp.initRobotDelay = 0;
+    zp.evilOttoLaunchTimer = 3;
+    zp.evilOttoVertPos = 8;
+    zp.prevEvilOttoVertPos = 8;
+    zp.tempOttoVertPos = 24;
+    zp.ottoVerticalDelta = 1;
+    zp.evilOttoHorizPos = 50;
+    zp.playerHorizPos = 60;
+    zp.robotVertPos[0] = 20;
+    zp.robotMotionDelay = 0x80;
+    zp.robotMotion = 0;
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 1;
+
+    tick(gsm);
+
+    expect(zp.evilOttoVertPos).toBe(8);
+    expect(zp.evilOttoHorizPos).toBe(50);
+    expect(zp.ottoVerticalDelta).toBe(1);
+  });
+
+  it("moves Otto when the robot motion ASL/ADC sequence carries", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    enableOtto(zp);
+    zp.initRobotDelay = 0;
+    zp.evilOttoLaunchTimer = 3;
+    zp.evilOttoVertPos = 8;
+    zp.prevEvilOttoVertPos = 8;
+    zp.tempOttoVertPos = 24;
+    zp.ottoVerticalDelta = 1;
+    zp.evilOttoHorizPos = 50;
+    zp.playerHorizPos = 60;
+    zp.robotVertPos[0] = 20;
+    zp.robotMotionDelay = 0xff;
+    zp.robotMotion = 1;
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 1;
+
+    tick(gsm);
+
+    expect(zp.evilOttoVertPos).toBe(9);
+    expect(zp.evilOttoHorizPos).toBe(51);
+  });
+
+  it("tracks player horizontally one pixel per moved frame", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    enableOtto(zp);
+    zp.initRobotDelay = 0;
+    zp.evilOttoLaunchTimer = 3;
+    zp.evilOttoHorizPos = 50;
+    zp.evilOttoVertPos = 80;
+    zp.ottoVerticalDelta = 1;
+    zp.prevEvilOttoVertPos = 80;
+    zp.tempOttoVertPos = 96;
     zp.playerHorizPos = 100;
     zp.playerVertPos = 80;
+    zp.robotVertPos[0] = 0x7f;
     const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 1;
 
-    // Otto should transition from BOUNCING to TRACKING (within 10 Y pixels)
     tick(gsm);
 
-    expect(zp.kernelSection).toBe(OttoState.TRACKING);
+    expect(zp.evilOttoHorizPos).toBe(51);
+  });
 
-    // Otto should now track player horizontally
+  it("kills player on the ASM Otto collision boundary", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = OTTO_REBOUND;
+    zp.evilOttoLaunchTimer = 3;
+    zp.evilOttoHorizPos = 50;
+    zp.evilOttoVertPos = 80 - (H_PLAYER - 1);
+    zp.playerHorizPos = 57;
+    zp.playerVertPos = 80;
+    zp.playerMotion = 10;
+    for (let i = 0; i < MAX_ROBOTS; i++) {
+      zp.robotVertPos[i] = 0x7f;
+    }
+    zp.robotVertPos[MAX_ROBOTS - 2] = 40; // keep Otto movement gated off for this collision-only check
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 255;
+
     tick(gsm);
-    expect(zp.evilOttoHorizPos).toBe(51); // moved toward player's 100
+
+    expect(zp.playerAnimationIndex).toBe(3);
+  });
+
+  it("does not kill player just outside the ASM Otto collision boundary", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = OTTO_REBOUND;
+    zp.evilOttoLaunchTimer = 3;
+    zp.evilOttoHorizPos = 50;
+    zp.evilOttoVertPos = 80 - H_PLAYER;
+    zp.playerHorizPos = 58;
+    zp.playerVertPos = 80;
+    zp.playerMotion = 10;
+    for (let i = 0; i < MAX_ROBOTS; i++) {
+      zp.robotVertPos[i] = 0x7f;
+    }
+    zp.robotVertPos[MAX_ROBOTS - 2] = 40; // keep Otto movement gated off for this collision-only check
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 255;
+
+    tick(gsm);
+
+    expect(zp.playerAnimationIndex).not.toBe(3);
+  });
+});
+
+describe("ASM robot missile constants", () => {
+  it("matches the targeting box constants used by DetermineToFireRobotMissile", () => {
+    expect(XROBOT_MISSILE_BOX).toBe(8);
+    expect(YROBOT_MISSILE_BOX).toBe(6);
   });
 });
 
@@ -179,26 +391,25 @@ describe("updatePlayer (via tick)", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
-    zp.playerDirection = 0x01; // MOVE_RIGHT
     // Set playerMotion high enough to trigger movement
     zp.playerMotion = 200; // 200 + 112 = 312 > 255
     const gsm = buildStateMachine(zp, NTSC);
+    const startX = zp.playerHorizPos;
+    gsm.joystickInput = MOVE_RIGHT;
 
     tick(gsm);
 
-    expect(zp.playerHorizPos).toBeGreaterThan(
-      zp.playerHorizPos - 1
-    );
+    expect(zp.playerHorizPos).toBeGreaterThan(startX);
   });
 
   it("clamps player at XMAX_PLAYER", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
-    zp.playerDirection = 0x01; // MOVE_RIGHT
     zp.playerHorizPos = XMAX_PLAYER;
     zp.playerMotion = 200;
     const gsm = buildStateMachine(zp, NTSC);
+    gsm.joystickInput = MOVE_RIGHT;
 
     tick(gsm);
 
@@ -209,10 +420,10 @@ describe("updatePlayer (via tick)", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
-    zp.playerDirection = 0x02; // MOVE_LEFT
     zp.playerHorizPos = XMIN;
     zp.playerMotion = 200;
     const gsm = buildStateMachine(zp, NTSC);
+    gsm.joystickInput = MOVE_LEFT;
 
     tick(gsm);
 
@@ -223,18 +434,98 @@ describe("updatePlayer (via tick)", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
-    zp.playerDirection = 0x04; // MOVE_DOWN
-    zp.playerHorizPos = 50;
-    zp.playerVertPos = 159;
+    zp.playerHorizPos = 73;
+    zp.playerVertPos = 151;
     zp.playerMotion = 200;
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.joystickInput = MOVE_DOWN;
+
+    tick(gsm);
+
+    // Player reached the bottom doorway boundary (>= 152) — triggers room exit.
+    expect(zp.gameState).toBe(0xff);
+    expect(zp.playerVertPos).toBe(0x7f); // player hidden
+    expect(zp.tempPlayerExitingPos).toBe(PLAYER_ENTERING_SOUTH);
+  });
+
+  it("awards room-clear bonus before resetting killed robot count", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameState = 0xff;
+    zp.tempPlayerExitingPos = PLAYER_ENTERING_SOUTH;
+    zp.upperPlayfieldLimit = 10;
+    zp.lowerPlayfieldLimit = 10;
+    zp.robotVertPos[0] = 0x7f;
+    zp.numberRobotsKilled = 6;
     const gsm = buildStateMachine(zp, NTSC);
 
     tick(gsm);
 
-    // Player reached bottom exit boundary (>= 152) — triggers room exit
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x00);
+    expect(zp.playerScore2).toBe(0x60);
+    expect(zp.numberRobotsKilled).toBe(0);
+  });
+
+  it("preserves killed robot count from real exit setup until room-clear bonus is awarded", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.kernelSection = GameState.PLAY;
+    zp.playerHorizPos = 73;
+    zp.playerVertPos = 151;
+    zp.playerMotion = 200;
+    zp.robotVertPos[0] = 0x7f;
+    zp.numberRobotsKilled = 6;
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.joystickInput = MOVE_DOWN;
+
+    tick(gsm);
     expect(zp.gameState).toBe(0xff);
-    expect(zp.playerVertPos).toBe(0x7f); // player hidden
-    expect(zp.tempPlayerExitingPos).toBe(PLAYER_ENTERING_SOUTH);
+    expect(zp.numberRobotsKilled).toBe(6);
+
+    zp.upperPlayfieldLimit = 10;
+    zp.lowerPlayfieldLimit = 10;
+    tick(gsm);
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x00);
+    expect(zp.playerScore2).toBe(0x60);
+    expect(zp.numberRobotsKilled).toBe(0);
+  });
+
+  it("does not exit from a sealed bottom wall segment away from the doorway", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.kernelSection = GameState.PLAY;
+    zp.playerHorizPos = 50;
+    zp.playerVertPos = 151;
+    zp.playerMotion = 200;
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.joystickInput = MOVE_DOWN;
+
+    tick(gsm);
+
+    expect(zp.gameState).toBe(0);
+    expect(zp.playerVertPos).not.toBe(0x7f);
+  });
+
+  it("does not award room-clear bonus if robots remain on screen", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameState = 0xff;
+    zp.tempPlayerExitingPos = PLAYER_ENTERING_SOUTH;
+    zp.upperPlayfieldLimit = 10;
+    zp.lowerPlayfieldLimit = 10;
+    zp.robotVertPos[0] = 40;
+    zp.numberRobotsKilled = 6;
+    const gsm = buildStateMachine(zp, NTSC);
+
+    tick(gsm);
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x00);
+    expect(zp.playerScore2).toBe(0x00);
+    expect(zp.numberRobotsKilled).toBe(0);
   });
 
   it("skips player update when dying", () => {
@@ -256,33 +547,34 @@ describe("updatePlayer (via tick)", () => {
     expect(zp.playerHorizPos).toBe(50);
   });
 
-  it("sets animation index when shooting", () => {
+  it("shooting resets fractional motion but keeps the ROM standing/run counter instead of writing a fake death-adjacent state", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
+    zp.playerMotion = 77;
     const gsm = buildStateMachine(zp, NTSC);
     // Set joystick to MOVE_UP + fire (tick overwrites playerDirection from joystickInput)
     gsm.joystickInput = 0x11; // MOVE_UP (0x01) + fire (0x10)
 
     tick(gsm);
 
-    // Shooting UP uses table index 2 → PlayerShootingAnimationTable[2] = 2
-    expect(zp.playerAnimationIndex).toBe(2);
+    expect(zp.playerAnimationIndex).toBe(0);
+    expect(zp.playerMotion).toBe(112);
   });
 
-  it("toggles running animation when moving", () => {
+  it("advances running animation only when movement actually occurs", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
     const gsm = buildStateMachine(zp, NTSC);
-    // Set joystick to MOVE_RIGHT (tick overwrites playerDirection from joystickInput)
     gsm.joystickInput = 0x01;
 
-    const initialAnim = zp.playerAnimationIndex;
     tick(gsm);
+    expect(zp.playerAnimationIndex).toBe(0); // no overflow, no animation advance
 
-    // Animation should toggle bit 0 (running0 <-> running1)
-    expect(zp.playerAnimationIndex & 1).not.toBe(initialAnim & 1);
+    zp.playerMotion = 255;
+    tick(gsm);
+    expect(zp.playerAnimationIndex).toBe(2); // ROM wraps 0 -> 2 on first moved frame
   });
 
   it("sets standing animation when not moving or shooting", () => {
@@ -302,22 +594,23 @@ describe("updatePlayer (via tick)", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
-    zp.playerDirection = 0x01; // MOVE_RIGHT
     zp.playerMotion = 144; // 144 + 112 = 256 > 255 → move
     const gsm = buildStateMachine(zp, NTSC);
+    const startX = zp.playerHorizPos;
+    gsm.joystickInput = MOVE_RIGHT;
 
     tick(gsm);
 
-    expect(zp.playerHorizPos).toBeGreaterThan(50);
+    expect(zp.playerHorizPos).toBeGreaterThan(startX);
   });
 
   it("NTSC: player does not move when playerMotion + 112 <= 255", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
-    zp.playerDirection = 0x01; // MOVE_RIGHT
     zp.playerMotion = 100; // 100 + 112 = 212 <= 255 → no move
     const gsm = buildStateMachine(zp, NTSC);
+    gsm.joystickInput = MOVE_RIGHT;
 
     tick(gsm);
 
@@ -654,7 +947,7 @@ describe("checkMissileCollisions (via tick)", () => {
     expect(zp.playerMissileDirection).toBe(0);
   });
 
-  it("awards 50 points for robot kill", () => {
+  it("awards 50 packed-BCD points for robot kill", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
@@ -668,20 +961,20 @@ describe("checkMissileCollisions (via tick)", () => {
 
     tick(gsm);
 
-    // Score: 050 → playerScore0=0, playerScore1=5, playerScore2=0
-    expect(zp.playerScore0).toBe(0);
-    expect(zp.playerScore1).toBe(5);
-    expect(zp.playerScore2).toBe(0);
+    // Score: 000050 → playerScore bytes [00, 00, 50]
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x00);
+    expect(zp.playerScore2).toBe(0x50);
   });
 
-  it("awards extra life every 20 kills", () => {
+  it("awards extra life when score crosses the 1000-point threshold", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
-    // Set up so kill count reaches exactly 20
-    zp.numberRobotsKilled = 19;
-    // Need to set gameVariation to include EXTRA_LIFE_2000
-    zp.gameVariation = EXTRA_LIFE_2000 | ROBOT_SHOOTING;
+    zp.gameVariation = EXTRA_LIFE_1000 | ROBOT_SHOOTING;
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x09;
+    zp.playerScore2 = 0x50;
     zp.playerMissileDirection = 0x08;
     zp.playerMissileHorizPos = 50;
     zp.playerMissileVertPos = 50;
@@ -693,12 +986,10 @@ describe("checkMissileCollisions (via tick)", () => {
 
     tick(gsm);
 
-    // After 20th kill, should get extra life
     expect(zp.numberOfLives).toBe(initialLives + 1);
-    // 50 + 2000 = 2050 → score = 0-5-2
-    expect(zp.playerScore0).toBe(0);
-    expect(zp.playerScore1).toBe(5);
-    expect(zp.playerScore2).toBe(2);
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x10);
+    expect(zp.playerScore2).toBe(0x00);
   });
 
   it("does not kill robot when missile direction is 0", () => {
@@ -787,18 +1078,7 @@ describe("checkMissileCollisions (via tick)", () => {
 // ---------------------------------------------------------------------------
 
 describe("incrementScore", () => {
-  it("adds 1 to score", () => {
-    const zp = createZeroPage();
-    initGame(zp, 0, NTSC);
-    zp.playerScore0 = 3;
-    zp.playerScore1 = 4;
-    zp.playerScore2 = 5;
-
-    // We need to call incrementScore indirectly since it's unexported.
-    // Instead, test via the robot-kill path which calls incrementScore(zp, 50).
-    // For direct BCD testing, we set up state that would result from it.
-
-    // Actually, let's test via tick + robot kill:
+  function killRobotWithScore(zp: ReturnType<typeof createZeroPage>): void {
     zp.kernelSection = GameState.PLAY;
     zp.playerMissileDirection = 0x08;
     zp.playerMissileHorizPos = 50;
@@ -806,95 +1086,222 @@ describe("incrementScore", () => {
     zp.robotHorizPos[0] = 50;
     zp.robotVertPos[0] = 50;
     zp.robotAnimationIndex[0] = ROBOT_STAND_ANIM_OFFSET;
-    const gsm = buildStateMachine(zp, NTSC);
+    tick(buildStateMachine(zp, NTSC));
+  }
 
-    tick(gsm);
-
-    // Should add 50 points
-    expect(zp.playerScore0).toBe(3); // 3 + 0 = 3 (no carry)
-    expect(zp.playerScore1).toBe(9); // 4 + 5 = 9
-    expect(zp.playerScore2).toBe(5); // 5 + 0 = 5
-  });
-
-  it("handles BCD carry from ones to tens", () => {
+  it("adds 50 to the low packed BCD score byte", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
-    zp.playerScore0 = 5;
-    zp.playerScore1 = 4;
-    zp.playerScore2 = 5;
-    zp.kernelSection = GameState.PLAY;
-    zp.playerMissileDirection = 0x08;
-    zp.playerMissileHorizPos = 50;
-    zp.playerMissileVertPos = 50;
-    zp.robotHorizPos[0] = 50;
-    zp.robotVertPos[0] = 50;
-    zp.robotAnimationIndex[0] = ROBOT_STAND_ANIM_OFFSET;
-    const gsm = buildStateMachine(zp, NTSC);
+    zp.playerScore0 = 0x12;
+    zp.playerScore1 = 0x34;
+    zp.playerScore2 = 0x05;
 
-    tick(gsm);
+    killRobotWithScore(zp);
 
-    // 5 + 0 = 5 → ones = 5 (no carry from 50)
-    // 4 + 5 = 9 → tens = 9
-    // 5 + 0 = 5 → hundreds = 5
-    expect(zp.playerScore0).toBe(5);
-    expect(zp.playerScore1).toBe(9);
-    expect(zp.playerScore2).toBe(5);
+    expect(zp.playerScore0).toBe(0x12);
+    expect(zp.playerScore1).toBe(0x34);
+    expect(zp.playerScore2).toBe(0x55);
   });
 
-  it("handles BCD carry from tens to hundreds", () => {
+  it("carries from low byte into middle packed BCD byte", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
-    zp.playerScore0 = 5;
-    zp.playerScore1 = 5;
-    zp.playerScore2 = 5;
-    zp.kernelSection = GameState.PLAY;
-    zp.playerMissileDirection = 0x08;
-    zp.playerMissileHorizPos = 50;
-    zp.playerMissileVertPos = 50;
-    zp.robotHorizPos[0] = 50;
-    zp.robotVertPos[0] = 50;
-    zp.robotAnimationIndex[0] = ROBOT_STAND_ANIM_OFFSET;
-    const gsm = buildStateMachine(zp, NTSC);
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x00;
+    zp.playerScore2 = 0x50;
 
-    tick(gsm);
+    killRobotWithScore(zp);
 
-    // 5 + 0 = 5 → ones = 5 (no carry from 50)
-    // 5 + 5 = 10 → tens = 0, carry 1
-    // 5 + 0 + 1 = 6 → hundreds = 6
-    expect(zp.playerScore0).toBe(5);
-    expect(zp.playerScore1).toBe(0);
-    expect(zp.playerScore2).toBe(6);
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x01);
+    expect(zp.playerScore2).toBe(0x00);
   });
 
-  it("handles carry from tens to hundreds and hundreds wrap", () => {
+  it("carries from middle byte into high packed BCD byte", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
-    // Start at 950 (0-5-9) to test hundreds wrap when adding 1000
-    zp.playerScore0 = 0;
-    zp.playerScore1 = 5;
-    zp.playerScore2 = 9;
-    // Need to test 100+ score addition to trigger hundreds wrap
-    // This is hard to test via tick since max single addition is 2000
-    // Let's test via 1000-point extra life
-    zp.kernelSection = GameState.PLAY;
-    zp.numberRobotsKilled = 19;
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x99;
+    zp.playerScore2 = 0x50;
+
+    killRobotWithScore(zp);
+
+    expect(zp.playerScore0).toBe(0x01);
+    expect(zp.playerScore1).toBe(0x00);
+    expect(zp.playerScore2).toBe(0x00);
+  });
+
+  it("wraps after 999999 like three packed BCD bytes", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.playerScore0 = 0x99;
+    zp.playerScore1 = 0x99;
+    zp.playerScore2 = 0x50;
+
+    killRobotWithScore(zp);
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x00);
+    expect(zp.playerScore2).toBe(0x00);
+  });
+
+  it("awards extra life in 1000-point mode when crossing 950 to 1000", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
     zp.gameVariation = EXTRA_LIFE_1000 | ROBOT_SHOOTING;
-    zp.playerMissileDirection = 0x08;
-    zp.playerMissileHorizPos = 50;
-    zp.playerMissileVertPos = 50;
-    zp.robotHorizPos[0] = 50;
-    zp.robotVertPos[0] = 50;
-    zp.robotAnimationIndex[0] = ROBOT_STAND_ANIM_OFFSET;
-    const gsm = buildStateMachine(zp, NTSC);
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x09;
+    zp.playerScore2 = 0x50;
+    const initialLives = zp.numberOfLives;
 
-    tick(gsm);
+    killRobotWithScore(zp);
 
-    // 950 + 50 = 1000 (score1: 5+5=10→0, carry to hundreds: 9+0+1=10→0)
-    // + 1000 = 1000 (score2: 0+0+1=1)
-    // Final: 0-0-1
-    expect(zp.playerScore0).toBe(0);
-    expect(zp.playerScore1).toBe(0);
-    expect(zp.playerScore2).toBe(1);
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x10);
+    expect(zp.playerScore2).toBe(0x00);
+    expect(zp.numberOfLives).toBe(initialLives + 1);
+    expect(zp.gameState).toBe(0x03);
+  });
+
+  it("does not award extra life in 1000-point mode when reaching only 950", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = EXTRA_LIFE_1000 | ROBOT_SHOOTING;
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x09;
+    zp.playerScore2 = 0x00;
+    const initialLives = zp.numberOfLives;
+
+    killRobotWithScore(zp);
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x09);
+    expect(zp.playerScore2).toBe(0x50);
+    expect(zp.numberOfLives).toBe(initialLives);
+  });
+
+  it("awards extra life in 2000-point mode when crossing 1950 to 2000", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = EXTRA_LIFE_2000 | ROBOT_SHOOTING;
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x19;
+    zp.playerScore2 = 0x50;
+    const initialLives = zp.numberOfLives;
+
+    killRobotWithScore(zp);
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x20);
+    expect(zp.playerScore2).toBe(0x00);
+    expect(zp.numberOfLives).toBe(initialLives + 1);
+    expect(zp.gameState).toBe(0x03);
+  });
+
+  it("does not award extra life in 2000-point mode when reaching only 1950", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = EXTRA_LIFE_2000 | ROBOT_SHOOTING;
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x19;
+    zp.playerScore2 = 0x00;
+    const initialLives = zp.numberOfLives;
+
+    killRobotWithScore(zp);
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x19);
+    expect(zp.playerScore2).toBe(0x50);
+    expect(zp.numberOfLives).toBe(initialLives);
+  });
+
+  it("does not award extra life in 2000-point mode when crossing 2950 to 3000", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = EXTRA_LIFE_2000 | ROBOT_SHOOTING;
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x29;
+    zp.playerScore2 = 0x50;
+    const initialLives = zp.numberOfLives;
+
+    killRobotWithScore(zp);
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x30);
+    expect(zp.playerScore2).toBe(0x00);
+    expect(zp.numberOfLives).toBe(initialLives);
+  });
+
+  it("awards extra life in 1000-point mode on later x950 to next-thousand crossings", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = EXTRA_LIFE_1000 | ROBOT_SHOOTING;
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x29;
+    zp.playerScore2 = 0x50;
+    const initialLives = zp.numberOfLives;
+
+    killRobotWithScore(zp);
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x30);
+    expect(zp.playerScore2).toBe(0x00);
+    expect(zp.numberOfLives).toBe(initialLives + 1);
+  });
+
+  it("awards extra life in 2000-point mode on ASM bitmask crossings beyond 2000", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = EXTRA_LIFE_2000 | ROBOT_SHOOTING;
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x39;
+    zp.playerScore2 = 0x50;
+    const initialLives = zp.numberOfLives;
+
+    killRobotWithScore(zp);
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x40);
+    expect(zp.playerScore2).toBe(0x00);
+    expect(zp.numberOfLives).toBe(initialLives + 1);
+  });
+
+  it("twenty normal robot kills from zero reach 1000 and award one extra life in 1000-point mode", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = EXTRA_LIFE_1000 | ROBOT_SHOOTING;
+    const initialLives = zp.numberOfLives;
+
+    for (let i = 0; i < 20; i++) {
+      killRobotWithScore(zp);
+      if (i < 19) {
+        zp.robotAnimationIndex[0] = ROBOT_STAND_ANIM_OFFSET;
+        zp.playerMissileDirection = 0x08;
+        zp.playerMissileFlightTime = 1;
+      }
+    }
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x10);
+    expect(zp.playerScore2).toBe(0x00);
+    expect(zp.numberOfLives).toBe(initialLives + 1);
+  });
+
+  it("uses 1000-point extra-life behavior when both extra-life flags are set", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = EXTRA_LIFE_1000 | EXTRA_LIFE_2000 | ROBOT_SHOOTING;
+    zp.playerScore0 = 0x00;
+    zp.playerScore1 = 0x09;
+    zp.playerScore2 = 0x50;
+    const initialLives = zp.numberOfLives;
+
+    killRobotWithScore(zp);
+
+    expect(zp.playerScore0).toBe(0x00);
+    expect(zp.playerScore1).toBe(0x10);
+    expect(zp.playerScore2).toBe(0x00);
+    expect(zp.numberOfLives).toBe(initialLives + 1);
   });
 
   it("does not affect score when missile is off", () => {

@@ -26,14 +26,11 @@ describe("shooting animation fix", () => {
     zp.kernelSection = GameState.PLAY;
     const gsm = buildStateMachine(zp, NTSC);
 
-    // Shoot UP — missile will hit top boundary and expire
+    // Shoot UP once, then release so held fire does not relaunch immediately.
     gsm.joystickInput = 0x11; // MOVE_UP (0x01) + FIRE (0x10)
-    for (let i = 1; i <= 15; i++) {
-      const prevLives = zp.numberOfLives;
-      const prevAnim = zp.playerAnimationIndex;
-      tick(gsm);
-      console.log(`Tick ${i}: lives=${zp.numberOfLives} (prev=${prevLives}) anim=${zp.playerAnimationIndex} (prev=${prevAnim}) missileDir=${zp.playerMissileDirection} playerMissileVertPos=${zp.playerMissileVertPos} playerMissileHorizPos=${zp.playerMissileHorizPos} playerHorizPos=${zp.playerHorizPos} playerVertPos=${zp.playerVertPos} robot0Horiz=${zp.robotHorizPos[0]} robot0Vert=${zp.robotVertPos[0]} robot0Anim=${zp.robotAnimationIndex[0]} ottoLaunchTimer=${zp.evilOttoLaunchTimer} ottoHoriz=${zp.evilOttoHorizPos} ottoVert=${zp.evilOttoVertPos} kernelSection=${zp.kernelSection}`);
-    }
+    tick(gsm);
+    gsm.joystickInput = 0x00;
+    for (let i = 1; i <= 60; i++) tick(gsm);
 
     // After missile expires, player should survive and not be in death state
     expect(zp.playerMissileDirection).toBe(0);

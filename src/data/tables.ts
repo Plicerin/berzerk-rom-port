@@ -419,11 +419,11 @@ export const RobotAnimationTableFlat: number[] = [
 export const MazeOffsetTable = [0, 42, 84, 126];
 
 // -----------------------------------------------------------------------------
-// Player starting location values
-// [SOUTH, NORTH, EAST, WEST]
+// Player starting location values, indexed by tempPlayerExitingPos.
+// ASM: [SOUTH, NORTH, EAST, WEST]
 // -----------------------------------------------------------------------------
 
-export const StartingLocationValues = [1, 0, 2, 3];
+export const StartingLocationValues = [1, 0, 3, 2];
 
 // -----------------------------------------------------------------------------
 // Initial positions for player spawn

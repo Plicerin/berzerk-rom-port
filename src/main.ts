@@ -29,7 +29,8 @@ let gameState: GameStateMachine;
 // Active keys for held-down input
 const keys = new Set<string>();
 const FIRE = 0x10;
-let agentMode = true;
+let agentMode = false;
+let comparisonMode = false;
 
 function updateJoystick(): void {
   if (agentMode) return; // agent controls input
@@ -44,17 +45,20 @@ function updateJoystick(): void {
 
 function setupInput(): void {
   document.addEventListener("keydown", (e) => {
-    // Toggle agent mode with 'A' key
-    if (e.key === "a" || e.key === "A") {
-      // Only toggle if not using WASD for movement
-      if (!keys.has("w") && !keys.has("s") && !keys.has("d")) {
-        agentMode = !agentMode;
-        console.log(agentMode ? "Agent mode ON" : "Agent mode OFF");
-        return;
-      }
+    if (e.key === "g" || e.key === "G") {
+      agentMode = !agentMode;
+      if (!agentMode) updateJoystick();
+      console.log(agentMode ? "Agent mode ON" : "Agent mode OFF");
+      return;
     }
 
-    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) {
+    if (e.key === "c" || e.key === "C") {
+      comparisonMode = !comparisonMode;
+      console.log(comparisonMode ? "Comparison mode ON" : "Comparison mode OFF");
+      return;
+    }
+
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "a", "s", "d", " "].includes(e.key)) {
       e.preventDefault();
       keys.add(e.key);
       updateJoystick();
@@ -116,7 +120,7 @@ function renderLoop(_timestamp: number): void {
   tick(gameState);
 
   // Render to canvas
-  render(zp, canvas);
+  render(zp, canvas, gameState.region, { comparisonMode });
 
   // Continue loop
   requestAnimationFrame(renderLoop);

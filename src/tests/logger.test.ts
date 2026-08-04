@@ -109,8 +109,9 @@ describe("GameLogger", () => {
       const roomChanges = gameLogger.getEntriesByType("ROOM_CHANGE");
       expect(roomChanges.length).toBe(initialRoomChanges + 1);
       const lastChange = roomChanges[roomChanges.length - 1];
+      const details = lastChange.details as { fromRoom: number; toRoom: number };
       // fromRoom was the current gameLevel before increment
-      expect(lastChange.details.toRoom).toBe(lastChange.details.fromRoom + 1);
+      expect(details.toRoom).toBe(details.fromRoom + 1);
     });
 
     it("summarize returns meaningful output", () => {

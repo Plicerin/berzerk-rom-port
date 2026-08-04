@@ -3,39 +3,130 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Berzerk - TypeScript Decomp</title>
+  <title>Berzerk</title>
   <style>
+    :root {
+      color-scheme: dark;
+      --bg: #02030a;
+      --cyan: #00d7ff;
+      --blue: #1047ff;
+      --yellow: #ffd640;
+      --red: #ff3030;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
-      padding: 0;
-      background: #000;
-      display: flex;
-      justify-content: center;
-      align-items: center;
       min-height: 100vh;
-      font-family: monospace;
+      background: #000;
+      color: #f6fbff;
+      display: grid;
+      place-items: center;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow-x: hidden;
     }
+
     #berzerk-container {
+      width: min(100vw, 1120px);
+      padding: clamp(16px, 3vw, 36px);
+      display: grid;
+      gap: 18px;
+      justify-items: center;
+    }
+
+    .cabinet {
+      width: min(100%, 1040px);
+      padding: clamp(14px, 2vw, 26px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 0;
+      background: #000;
+      box-shadow: none;
+    }
+
+    .marquee {
       display: flex;
-      flex-direction: column;
-      align-items: center;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
+
+    .title {
+      margin: 0;
+      font-size: clamp(30px, 6vw, 72px);
+      line-height: 0.88;
+      color: var(--yellow);
+      text-shadow: none;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: rgba(246, 251, 255, 0.72);
+      font-size: clamp(11px, 1.5vw, 14px);
+      text-align: right;
+    }
+
+    .game-stage {
+      display: grid;
+      justify-items: center;
+    }
+
+    .screen-frame {
+      position: relative;
+      padding: 0;
+      border-radius: 0;
+      background: #000;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      box-shadow: none;
+      overflow: hidden;
+    }
+
     #berzerk-container canvas {
-      border: 2px solid #333;
+      max-width: 100%;
+      border-radius: 0;
+      border: 0;
+      box-shadow: none;
+      image-rendering: pixelated;
+      display: block;
+      background: #000;
     }
+
     #info {
-      color: #888;
+      color: rgba(246, 251, 255, 0.74);
       text-align: center;
-      margin-top: 10px;
-      font-size: 12px;
+      font-size: 13px;
+      line-height: 1.6;
+      letter-spacing: 0.04em;
+    }
+
+    .keys {
+      color: var(--cyan);
+      text-shadow: none;
     }
   </style>
 </head>
 <body>
-  <div id="berzerk-container">
-    <canvas id="game-canvas"></canvas>
-    <div id="info">Berzerk TypeScript Decomp — Atari 2600 Emulation</div>
-  </div>
+  <main id="berzerk-container" aria-label="Berzerk arcade cabinet">
+    <section class="cabinet">
+      <header class="marquee">
+        <h1 class="title">BERZERK</h1>
+        <p class="subtitle">Atari 2600 gameplay replica<br />Robots • Lasers • Evil Otto</p>
+      </header>
+      <div class="game-stage">
+        <div class="screen-frame">
+          <canvas id="game-canvas"></canvas>
+        </div>
+      </div>
+    </section>
+    <div id="info">
+      <span class="keys">Arrow keys / WASD</span> move · <span class="keys">Space</span> fires · <span class="keys">G</span> toggles agent · <span class="keys">C</span> toggles comparison HUD
+    </div>
+  </main>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

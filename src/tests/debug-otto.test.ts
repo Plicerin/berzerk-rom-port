@@ -1,42 +1,53 @@
 import { describe, it, expect } from "vitest";
 import { createZeroPage } from "../tia/zeropage";
-import { initGame, tick, GameStateMachine, GameState, OttoState } from "../game";
-import { NTSC } from "../constants";
+import { initGame, tick, GameStateMachine } from "../game";
+import { MAX_ROBOTS, NTSC, OTTO_REBOUND } from "../constants";
 
 function buildStateMachine(zp: ReturnType<typeof createZeroPage>, region: number): GameStateMachine {
   return { zp, region, joystickInput: 0, lastJoystickInput: 0, frameCount: 0, vblankCount: 0, overscanCount: 0, colorCycleIndex: 0 };
 }
 
-describe("debug otto launch", () => {
-  it("trace otto launch", () => {
+describe("Otto ASM frame transitions", () => {
+  it("increments the launch timer on frame rollover only", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
-    zp.gameVariation &= ~0x08; // clear NO_OTTO
-    zp.evilOttoLaunchTimer = 0;
-    zp.kernelSection = GameState.VBLANK;
+    zp.gameVariation = OTTO_REBOUND;
+    zp.robotVertPos[MAX_ROBOTS - 2] = 0x7f;
     const gsm = buildStateMachine(zp, NTSC);
 
-    console.log("Before any tick: kernelSection =", zp.kernelSection, "launchTimer =", zp.evilOttoLaunchTimer);
-    
-    tick(gsm); // sets timer to 200
-    console.log("After tick 1: kernelSection =", zp.kernelSection, "launchTimer =", zp.evilOttoLaunchTimer, "ottoVertPos =", zp.evilOttoVertPos, "frameCount =", gsm.frameCount);
-    
-    zp.evilOttoLaunchTimer = 1;
-    tick(gsm); // Otto launches
-    console.log("After tick 2: kernelSection =", zp.kernelSection, "launchTimer =", zp.evilOttoLaunchTimer, "ottoVertPos =", zp.evilOttoVertPos, "ottoDelta =", zp.ottoVerticalDelta);
-    
-    let finalKernel = 0;
-    for (let i = 0; i < 60; i++) {
-      tick(gsm);
-      if (i === 59) {
-        finalKernel = zp.kernelSection;
-      }
-    }
-    console.log("After 60 more ticks: kernelSection =", finalKernel, "ottoVertPos =", zp.evilOttoVertPos, "numberOfLives =", zp.numberOfLives);
-    console.log("playerVertPos =", zp.playerVertPos, "playerHorizPos =", zp.playerHorizPos);
-    console.log("robotVertPos =", zp.robotVertPos);
-    console.log("robotHorizPos =", zp.robotHorizPos);
-    
-    expect(finalKernel).toBe(OttoState.BOUNCING);
+    tick(gsm);
+    expect(zp.evilOttoLaunchTimer).toBe(0);
+
+    gsm.frameCount = 255;
+    tick(gsm);
+    expect(zp.evilOttoLaunchTimer).toBe(1);
+    expect(zp.evilOttoVertPos).toBe(8);
+    expect(zp.tempOttoVertPos).toBe(24);
+  });
+
+  it("performs an exact fast-move bounce sequence", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.gameVariation = OTTO_REBOUND;
+    zp.robotVertPos[MAX_ROBOTS - 2] = 0x7f;
+    zp.robotVertPos[0] = 0x7f;
+    zp.initRobotDelay = 0;
+    zp.evilOttoLaunchTimer = 3;
+    zp.evilOttoVertPos = 23;
+    zp.prevEvilOttoVertPos = 8;
+    zp.tempOttoVertPos = 24;
+    zp.ottoVerticalDelta = 1;
+    zp.evilOttoHorizPos = 50;
+    zp.playerHorizPos = 49;
+    zp.playerVertPos = 12;
+    const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 1;
+
+    tick(gsm);
+    expect(zp.evilOttoVertPos).toBe(24);
+    expect(zp.prevEvilOttoVertPos).toBe(10);
+    expect(zp.tempOttoVertPos).toBe(30);
+    expect(zp.ottoVerticalDelta).toBe(-4);
+    expect(zp.evilOttoHorizPos).toBe(49);
   });
 });
