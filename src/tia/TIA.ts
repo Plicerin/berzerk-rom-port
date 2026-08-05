@@ -346,7 +346,7 @@ export function computeCollisions(
   // Player-robot collision
   for (let i = 0; i < 6; i++) {
     const robotX = zp.robotHorizPos[i];
-    const robotY = zp.robotVertPos[i];
+    const robotY = zp.robotVertPos[i] * 2;
     if (robotX >= 127) continue;
 
     if (

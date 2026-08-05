@@ -1140,7 +1140,7 @@ function checkMissileBoundsAndCollisions(zp: ZeroPage): void {
 
     // Robot missile hit player (CXM1P bit 7)
     const dxrp = Math.abs(zp.robotMissileHorizPos - zp.playerHorizPos);
-    const dyrp = Math.abs(zp.robotMissileVertPos - zp.playerVertPos);
+    const dyrp = Math.abs(zp.robotMissileVertPos * 2 - zp.playerVertPos);
     if (dxrp < H_PLAYER && dyrp < H_PLAYER) {
       turnOff = true;
       triggerPlayerDeath(zp);
@@ -1190,7 +1190,7 @@ function checkMissileBoundsAndCollisions(zp: ZeroPage): void {
 function isMissileInMazeWall(x: number, y: number, mazeOffset: number): boolean {
   if (y < 2 || y >= 86) return false;
 
-  const dataIndex = (y >> 1) + mazeOffset;
+  const dataIndex = y + mazeOffset;
   const pf0 = MazePF0Data[dataIndex] ?? 0;
   const pf1 = MazePF1Data[dataIndex] ?? 0;
   const pf2 = MazePF2Data[dataIndex] ?? 0;
@@ -1236,7 +1236,7 @@ function checkPlayerCollisions(zp: ZeroPage): void {
     if (zp.robotVertPos[i] === 0x7f) continue;
 
     const dx = Math.abs(zp.playerHorizPos - zp.robotHorizPos[i]);
-    const dy = Math.abs(zp.playerVertPos - zp.robotVertPos[i]);
+    const dy = Math.abs(zp.playerVertPos - zp.robotVertPos[i] * 2);
 
     if (dx < H_ROBOT && dy < H_PLAYER) {
       triggerPlayerDeath(zp);
@@ -1305,7 +1305,7 @@ function checkMissileCollisions(zp: ZeroPage): void {
   if (zp.playerMissileDirection !== 0 && !(zp.gameVariation & OTTO_INVINCIBLE)) {
     if (zp.evilOttoHorizPos > 0 && zp.evilOttoVertPos > 0) {
       const dx = Math.abs(zp.playerMissileHorizPos - zp.evilOttoHorizPos);
-      const dy = Math.abs(zp.playerMissileVertPos - zp.evilOttoVertPos);
+      const dy = Math.abs(zp.playerMissileVertPos * 2 - zp.evilOttoVertPos);
 
       if (dx < H_ROBOT && dy < H_ROBOT) {
         zp.playerMissileDirection = 0;

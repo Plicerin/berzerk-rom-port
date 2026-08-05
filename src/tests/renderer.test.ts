@@ -130,7 +130,7 @@ describe("TIA Engine", () => {
   it("detects player-robot collision", () => {
     const zp = createZeroPage();
     zp.robotHorizPos[0] = 75;
-    zp.robotVertPos[0] = 82;
+    zp.robotVertPos[0] = 41;
 
     const result = computeCollisions(zp, 73, 80);
 
@@ -486,7 +486,7 @@ describe("Renderer", () => {
     expect(ctx.drawCalls.some(call => call.args[0] === 38.4 && call.args[2] === 9.5)).toBe(false);
     expect(ctx.drawCalls.some(call => Math.abs(call.args[0] - 46) < 0.001 && Math.abs(call.args[1] - 77.068) < 0.001 && Math.abs(call.args[2] - 1.9) < 0.001 && Math.abs(call.args[3] - 2.102) < 0.001)).toBe(true);
     expect(ctx.drawCalls.some(call => call.args[0] === 76.5 && call.args[2] === 9.5)).toBe(false);
-    expect(ctx.drawCalls.some(call => Math.abs(call.args[0] - 84) < 0.001 && Math.abs(call.args[1] - 66.557) < 0.001 && Math.abs(call.args[2] - 1.9) < 0.001)).toBe(true);
+    expect(ctx.drawCalls.some(call => Math.abs(call.args[0] - 84) < 0.001 && Math.abs(call.args[1] - 119.114) < 0.001 && Math.abs(call.args[2] - 1.9) < 0.001 && Math.abs(call.args[3] - 2.102) < 0.001)).toBe(true);
   });
 
   it("mirrors asymmetric player sprites when facing left", () => {
@@ -544,6 +544,32 @@ describe("Renderer", () => {
 
     expect(missileY).toBeGreaterThanOrEqual(playerMinY);
     expect(missileY).toBeLessThanOrEqual(playerMaxY);
+  });
+
+  it("renders player missiles and robots in the same 2LK vertical coordinate domain", () => {
+    const ctx = createMockContext();
+    const canvas = {
+      getContext: vi.fn().mockReturnValue(ctx),
+    } as unknown as HTMLCanvasElement;
+    const zp = createZeroPage();
+    initGame(zp, 0, 0);
+    for (let i = 0; i < 6; i++) {
+      zp.robotVertPos[i] = 0x7f;
+    }
+    zp.robotHorizPos[0] = 58;
+    zp.robotVertPos[0] = 45;
+    zp.robotAnimationIndex[0] = 0;
+    zp.playerMissileFlightTime = 1;
+    zp.playerMissileDirection = MOVE_RIGHT;
+    zp.playerMissileHorizPos = 58;
+    zp.playerMissileVertPos = 45;
+
+    render(zp, canvas);
+
+    const robotMinY = Math.min(...ctx.drawCalls.filter(call => call.fillStyle === "#c1a739").map(call => call.args[1]));
+    const missileY = ctx.drawCalls.find(call => call.fillStyle === "#ffffff")!.args[1];
+
+    expect(Math.abs(missileY - robotMinY)).toBeLessThanOrEqual(2);
   });
 
   it("does not render a robot missile for the inactive 0x0f sentinel direction", () => {

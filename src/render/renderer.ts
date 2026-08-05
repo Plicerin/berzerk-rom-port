@@ -250,7 +250,7 @@ function renderRobots(ctx: CanvasRenderingContext2D, zp: ZeroPage, clip: Transit
       const row = spriteData[line];
       if (row === 0) continue;
 
-      const screenY = VIEWPORT_Y + robotVertPos * SCALE_Y + line * SPRITE_SCALE;
+      const screenY = VIEWPORT_Y + robotVertPos * 2 * SCALE_Y + line * SPRITE_SCALE;
       for (let bit = 0; bit < 8; bit++) {
         if (row & (1 << (7 - bit))) {
           ctx.fillStyle = cssColor;
@@ -393,9 +393,9 @@ function renderMissiles(ctx: CanvasRenderingContext2D, zp: ZeroPage, clip: Trans
 
   if (zp.robotMissileFlightTime > 0 && zp.robotMissileDirection !== 0 && zp.robotMissileDirection !== 0x0f) {
     const rmX = VIEWPORT_X + zp.robotMissileHorizPos * SCALE_X;
-    const rmY = VIEWPORT_Y + zp.robotMissileVertPos * SCALE_Y;
+    const rmY = VIEWPORT_Y + zp.robotMissileVertPos * 2 * SCALE_Y;
     ctx.fillStyle = "#ff3030";
-    drawClippedRect(ctx, clip, rmX, rmY, SCALE_X, SCALE_Y);
+    drawClippedRect(ctx, clip, rmX, rmY, SCALE_X, SCALE_Y * 2);
   }
 }
 

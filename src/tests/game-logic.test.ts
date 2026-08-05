@@ -786,7 +786,7 @@ describe("checkPlayerCollisions (via tick)", () => {
     zp.kernelSection = GameState.PLAY;
     // Place robot close to player
     zp.robotHorizPos[0] = 50;
-    zp.robotVertPos[0] = 50;
+    zp.robotVertPos[0] = 26;
     zp.robotAnimationIndex[0] = ROBOT_STAND_ANIM_OFFSET;
     zp.playerHorizPos = 52;
     zp.playerVertPos = 52;
@@ -832,6 +832,7 @@ describe("checkPlayerCollisions (via tick)", () => {
     // Keep playerMotion low so death handler doesn't immediately reset player
     zp.playerMotion = 10;
     const gsm = buildStateMachine(zp, NTSC);
+    gsm.frameCount = 255;
 
     tick(gsm);
 

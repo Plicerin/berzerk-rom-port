@@ -50,7 +50,7 @@ describe("robot missile cadence regressions", () => {
     initGame(zp, 0, NTSC);
     isolateRobotMissileLaunch(zp);
     zp.playerHorizPos = 50;
-    zp.playerVertPos = 80; // 2LK player Y = 40
+    zp.playerVertPos = 120; // 2LK player Y = 60, safely below the launch-frame missile
     zp.robotHorizPos[1] = 50;
     zp.robotVertPos[1] = 30;
     const state = buildStateMachine(zp, NTSC);
