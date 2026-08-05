@@ -947,6 +947,72 @@ describe("checkMissileCollisions (via tick)", () => {
     expect(zp.playerMissileDirection).toBe(0);
   });
 
+  it("ignores dying robot frames so shots can hit later active robots", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.kernelSection = GameState.PLAY;
+    zp.initRobotDelay = 0xff;
+    zp.robotMotionDelay = 0;
+    zp.playerHorizPos = 120;
+    zp.playerVertPos = 20;
+    for (let i = 0; i < MAX_ROBOTS; i++) {
+      zp.robotHorizPos[i] = 0;
+      zp.robotVertPos[i] = 0x7f;
+      zp.robotAnimationIndex[i] = ROBOT_DEATH_ANIM_OFFSET + 4;
+    }
+    zp.robotHorizPos[0] = 50;
+    zp.robotVertPos[0] = 50;
+    zp.robotAnimationIndex[0] = ROBOT_DEATH_ANIM_OFFSET + 1;
+    zp.robotHorizPos[1] = 50;
+    zp.robotVertPos[1] = 50;
+    zp.robotAnimationIndex[1] = ROBOT_DEATH_ANIM_OFFSET + 2;
+    zp.robotHorizPos[2] = 50;
+    zp.robotVertPos[2] = 50;
+    zp.robotAnimationIndex[2] = ROBOT_STAND_ANIM_OFFSET;
+    zp.playerMissileDirection = MOVE_RIGHT;
+    zp.playerMissileFlightTime = 1;
+    zp.playerMissileHorizPos = 48;
+    zp.playerMissileVertPos = 50;
+    const gsm = buildStateMachine(zp, NTSC);
+
+    tick(gsm);
+
+    expect(zp.robotAnimationIndex[0]).toBeGreaterThan(ROBOT_DEATH_ANIM_OFFSET);
+    expect(zp.robotAnimationIndex[1]).toBeGreaterThan(ROBOT_DEATH_ANIM_OFFSET);
+    expect(zp.robotAnimationIndex[2]).toBe(ROBOT_DEATH_ANIM_OFFSET);
+    expect(zp.playerMissileDirection).toBe(0);
+    expect(zp.numberRobotsKilled).toBe(1);
+  });
+
+  it("removes completed robot death animations and bubbles remaining robots up", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    zp.kernelSection = GameState.PLAY;
+    zp.initRobotDelay = 0xff;
+    zp.robotMotionDelay = 0;
+    zp.playerHorizPos = 120;
+    zp.playerVertPos = 20;
+    for (let i = 0; i < MAX_ROBOTS; i++) {
+      zp.robotHorizPos[i] = 0;
+      zp.robotVertPos[i] = 0x7f;
+      zp.robotAnimationIndex[i] = ROBOT_DEATH_ANIM_OFFSET + 4;
+    }
+    zp.robotHorizPos[0] = 40;
+    zp.robotVertPos[0] = 40;
+    zp.robotAnimationIndex[0] = ROBOT_DEATH_ANIM_OFFSET + 3;
+    zp.robotHorizPos[1] = 80;
+    zp.robotVertPos[1] = 60;
+    zp.robotAnimationIndex[1] = ROBOT_STAND_ANIM_OFFSET;
+    const gsm = buildStateMachine(zp, NTSC);
+
+    tick(gsm);
+
+    expect(zp.robotHorizPos[0]).toBe(80);
+    expect(zp.robotVertPos[0]).toBe(60);
+    expect(zp.robotAnimationIndex[0]).toBe(ROBOT_STAND_ANIM_OFFSET);
+    expect(zp.robotVertPos[1]).toBe(0x7f);
+  });
+
   it("awards 50 packed-BCD points for robot kill", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);

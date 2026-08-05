@@ -301,6 +301,27 @@ function setRobotStanding(zp: ZeroPage, robotIndex: number): void {
   zp.robotAnimationIndex[robotIndex] = ROBOT_STAND_ANIM_OFFSET;
 }
 
+function removeRobotAt(zp: ZeroPage, robotIndex: number): void {
+  for (let i = robotIndex; i < MAX_ROBOTS - 1; i++) {
+    zp.robotAnimationIndex[i] = zp.robotAnimationIndex[i + 1];
+    zp.robotHorizPos[i] = zp.robotHorizPos[i + 1];
+    zp.robotVertPos[i] = zp.robotVertPos[i + 1];
+    zp.robotFineHoriz[i] = zp.robotFineHoriz[i + 1] ?? 0;
+    zp.playerCollisions[i + 1] = zp.playerCollisions[i + 2] ?? 0;
+  }
+
+  const last = MAX_ROBOTS - 1;
+  zp.robotAnimationIndex[last] = ROBOT_DEATH_ANIM_OFFSET + 4;
+  zp.robotHorizPos[last] = 0;
+  zp.robotVertPos[last] = 0x7f;
+  zp.robotFineHoriz[last] = 0;
+  zp.playerCollisions[last + 1] = 0;
+
+  // ASM SortRobotVariables speeds remaining robots up when one leaves the list.
+  zp.robotMotionDelay = (zp.robotMotionDelay + 2) & 0xff;
+  zp.robotMissileSoundIndex = 0x0f;
+}
+
 /**
  * Check if adjacent robot collision would occur when moving vertically.
  * ASM: compares with robotVertPos-1 or robotVertPos+1 plus H_ROBOT padding.
@@ -548,8 +569,12 @@ export function updateRobots(zp: ZeroPage, region: number): void {
 
     // Handle dying robots
     if (animIdx >= ROBOT_DEATH_ANIM_OFFSET) {
-      if (animIdx < ROBOT_DEATH_ANIM_OFFSET + 4) {
-        advanceRobotAnimation(zp, i);
+      const nextAnim = animIdx + 1;
+      if (nextAnim < ROBOT_DEATH_ANIM_OFFSET + 4) {
+        zp.robotAnimationIndex[i] = nextAnim;
+      } else {
+        removeRobotAt(zp, i);
+        i--;
       }
       continue;
     }
@@ -1207,7 +1232,7 @@ function triggerPlayerDeath(zp: ZeroPage): void {
 function checkPlayerCollisions(zp: ZeroPage): void {
   // Check player vs robots (CXPPMM bit 7)
   for (let i = 0; i < MAX_ROBOTS; i++) {
-    if (zp.robotAnimationIndex[i] === ROBOT_DEATH_ANIM_OFFSET) continue;
+    if (zp.robotAnimationIndex[i] >= ROBOT_DEATH_ANIM_OFFSET) continue;
     if (zp.robotVertPos[i] === 0x7f) continue;
 
     const dx = Math.abs(zp.playerHorizPos - zp.robotHorizPos[i]);
@@ -1259,7 +1284,7 @@ function checkMissileCollisions(zp: ZeroPage): void {
 
   // Player missile vs robots (CXM0P bit 7)
   for (let i = 0; i < MAX_ROBOTS; i++) {
-    if (zp.robotAnimationIndex[i] === ROBOT_DEATH_ANIM_OFFSET) continue;
+    if (zp.robotAnimationIndex[i] >= ROBOT_DEATH_ANIM_OFFSET) continue;
     if (zp.robotVertPos[i] === 0x7f) continue;
 
     const dx = Math.abs(zp.playerMissileHorizPos - zp.robotHorizPos[i]);
