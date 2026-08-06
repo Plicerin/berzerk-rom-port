@@ -301,6 +301,14 @@ function setRobotStanding(zp: ZeroPage, robotIndex: number): void {
   zp.robotAnimationIndex[robotIndex] = ROBOT_STAND_ANIM_OFFSET;
 }
 
+function destroyRobot(zp: ZeroPage, robotIndex: number): void {
+  if (zp.robotAnimationIndex[robotIndex] >= ROBOT_DEATH_ANIM_OFFSET) return;
+
+  zp.robotAnimationIndex[robotIndex] = ROBOT_DEATH_ANIM_OFFSET;
+  zp.numberRobotsKilled++;
+  incrementScoreBCD(zp, SHOOTING_ROBOT_SCORE);
+}
+
 function removeRobotAt(zp: ZeroPage, robotIndex: number): void {
   for (let i = robotIndex; i < MAX_ROBOTS - 1; i++) {
     zp.robotAnimationIndex[i] = zp.robotAnimationIndex[i + 1];
@@ -635,7 +643,8 @@ export function updateRobots(zp: ZeroPage, region: number): void {
           zp.robotHorizPos[i] = nextX;
           advanceRobotAnimation(zp, i);
         } else {
-          setRobotStanding(zp, i);
+          zp.robotHorizPos[i] = nextX;
+          destroyRobot(zp, i);
         }
       } else {
         setRobotStanding(zp, i);
@@ -648,7 +657,8 @@ export function updateRobots(zp: ZeroPage, region: number): void {
           zp.robotHorizPos[i] = nextX;
           advanceRobotAnimation(zp, i);
         } else {
-          setRobotStanding(zp, i);
+          zp.robotHorizPos[i] = nextX;
+          destroyRobot(zp, i);
         }
       } else {
         setRobotStanding(zp, i);
@@ -687,7 +697,8 @@ export function updateRobots(zp: ZeroPage, region: number): void {
           zp.robotVertPos[i] = nextY;
           advanceRobotAnimation(zp, i);
         } else {
-          setRobotStanding(zp, i);
+          zp.robotVertPos[i] = nextY;
+          destroyRobot(zp, i);
         }
       }
     } else if (currentAnim >= ROBOT_DOWN_ANIM_OFFSET && currentAnim < ROBOT_DEATH_ANIM_OFFSET) {
@@ -721,7 +732,8 @@ export function updateRobots(zp: ZeroPage, region: number): void {
             zp.robotVertPos[i] = nextY;
             advanceRobotAnimation(zp, i);
           } else {
-            setRobotStanding(zp, i);
+            zp.robotVertPos[i] = nextY;
+            destroyRobot(zp, i);
           }
         }
       }
@@ -1291,12 +1303,9 @@ function checkMissileCollisions(zp: ZeroPage): void {
     const dy = Math.abs(zp.playerMissileVertPos - zp.robotVertPos[i]);
 
     if (dx < H_ROBOT && dy < H_ROBOT) {
-      zp.robotAnimationIndex[i] = ROBOT_DEATH_ANIM_OFFSET;
       zp.playerMissileDirection = 0;
       zp.playerMissileFlightTime = 0;
-      zp.numberRobotsKilled++;
-
-      incrementScoreBCD(zp, SHOOTING_ROBOT_SCORE);
+      destroyRobot(zp, i);
       break;
     }
   }
@@ -1348,13 +1357,17 @@ export function isPositionInWall(x: number, y: number, mazeOffset: number): bool
 }
 
 function isRobotPositionSafe(x: number, y: number, mazeOffset: number): boolean {
+  const top = y * 2;
+  const mid = (y + Math.floor(H_ROBOT / 2)) * 2;
+  const bottom = (y + H_ROBOT - 1) * 2;
+
   return !(
-    isPositionInWall(x, y, mazeOffset) ||
-    isPositionInWall(x + 7, y, mazeOffset) ||
-    isPositionInWall(x, y + 11, mazeOffset) ||
-    isPositionInWall(x + 7, y + 11, mazeOffset) ||
-    isPositionInWall(x, y + 5, mazeOffset) ||
-    isPositionInWall(x + 7, y + 5, mazeOffset)
+    isPositionInWall(x, top, mazeOffset) ||
+    isPositionInWall(x + 7, top, mazeOffset) ||
+    isPositionInWall(x, mid, mazeOffset) ||
+    isPositionInWall(x + 7, mid, mazeOffset) ||
+    isPositionInWall(x, bottom, mazeOffset) ||
+    isPositionInWall(x + 7, bottom, mazeOffset)
   );
 }
 

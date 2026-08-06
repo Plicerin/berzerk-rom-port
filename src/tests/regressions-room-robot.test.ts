@@ -8,6 +8,7 @@ import {
   PLAYER_ENTERING_NORTH,
   PLAYER_ENTERING_EAST,
   PLAYER_ENTERING_WEST,
+  ROBOT_DEATH_ANIM_OFFSET,
 } from "../constants";
 
 function buildStateMachine(
@@ -27,13 +28,17 @@ function buildStateMachine(
 }
 
 function isRobotBoxSafe(x: number, y: number, mazeOffset: number): boolean {
+  const top = y * 2;
+  const mid = (y + 4) * 2;
+  const bottom = (y + 8) * 2;
+
   return !(
-    isPositionInWall(x, y, mazeOffset) ||
-    isPositionInWall(x + 7, y, mazeOffset) ||
-    isPositionInWall(x, y + 11, mazeOffset) ||
-    isPositionInWall(x + 7, y + 11, mazeOffset) ||
-    isPositionInWall(x, y + 5, mazeOffset) ||
-    isPositionInWall(x + 7, y + 5, mazeOffset)
+    isPositionInWall(x, top, mazeOffset) ||
+    isPositionInWall(x + 7, top, mazeOffset) ||
+    isPositionInWall(x, mid, mazeOffset) ||
+    isPositionInWall(x + 7, mid, mazeOffset) ||
+    isPositionInWall(x, bottom, mazeOffset) ||
+    isPositionInWall(x + 7, bottom, mazeOffset)
   );
 }
 
@@ -58,7 +63,7 @@ describe("robot movement and room transition regressions", () => {
     expect(anyMoved).toBe(true);
   });
 
-  it("does not let a robot walk into a maze wall when chasing the player", () => {
+  it("destroys a robot when it walks into a maze wall", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);
     zp.kernelSection = GameState.PLAY;
@@ -68,7 +73,7 @@ describe("robot movement and room transition regressions", () => {
     const mazeOffset = zp.mazeOffset ?? 0;
     let found: { robotX: number; robotY: number; playerX: number; playerY: number } | null = null;
 
-    for (let y = 4; y <= 147 && !found; y++) {
+    for (let y = 2; y <= 78 && !found; y++) {
       for (let x = 1; x <= 138 && !found; x++) {
         if (!isRobotBoxSafe(x, y, mazeOffset)) continue;
         if (isRobotBoxSafe(x + 1, y, mazeOffset)) continue;
@@ -89,8 +94,10 @@ describe("robot movement and room transition regressions", () => {
     const state = buildStateMachine(zp, NTSC);
     tick(state);
 
-    expect(zp.robotHorizPos[0]).toBe(found!.robotX);
-    expect(isRobotBoxSafe(zp.robotHorizPos[0], zp.robotVertPos[0], mazeOffset)).toBe(true);
+    expect(zp.robotHorizPos[0]).toBe(found!.robotX + 1);
+    expect(zp.robotAnimationIndex[0]).toBe(ROBOT_DEATH_ANIM_OFFSET);
+    expect(zp.numberRobotsKilled).toBe(1);
+    expect(zp.playerScore2).toBe(0x50);
   });
 
   it("starts the new room in a directional opening state based on the entry doorway", () => {
