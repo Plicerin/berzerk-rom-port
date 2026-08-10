@@ -128,6 +128,8 @@ export const GameState = {
   TEXT_DISPLAY: 12,
 } as const;
 
+const ROBOT_RANDOM_X_MAX = 135;
+
 // Player animation states
 export const PlayerAnimState = {
   STANDING: 0,
@@ -225,11 +227,11 @@ export function initGame(zp: ZeroPage, gameSelection: number, region: number): v
   zp.initRobotDelay = 0;
   zp.lastRobotVertPos = 75;
   zp.temp02 = 0;
-  zp.loopCount = 135;
+  zp.loopCount = ROBOT_RANDOM_X_MAX;
   for (let i = MAX_ROBOTS - 1; i >= 0; i--) {
     zp.lastRobotVertPos = i === MAX_ROBOTS - 1 ? 75 : zp.lastRobotVertPos - (H_ROBOT + 1);
     zp.robotVertPos[i] = zp.lastRobotVertPos;
-    zp.robotHorizPos[i] = nextRandom(zp);
+    zp.robotHorizPos[i] = chooseSafeRobotHorizPos(zp, zp.lastRobotVertPos, zp.mazeOffset ?? 0);
     zp.robotAnimationIndex[i] = nextRandom(zp) & 7;
   }
 
@@ -1371,6 +1373,25 @@ function isRobotPositionSafe(x: number, y: number, mazeOffset: number): boolean 
   );
 }
 
+function chooseSafeRobotHorizPos(zp: ZeroPage, robotY: number, mazeOffset: number): number {
+  const firstX = nextRandom(zp);
+  if (isRobotPositionSafe(firstX, robotY, mazeOffset)) return firstX;
+
+  for (let offset = 1; offset <= ROBOT_RANDOM_X_MAX; offset++) {
+    const rightX = firstX + offset;
+    if (rightX <= ROBOT_RANDOM_X_MAX && isRobotPositionSafe(rightX, robotY, mazeOffset)) {
+      return rightX;
+    }
+
+    const leftX = firstX - offset;
+    if (leftX >= XMIN && isRobotPositionSafe(leftX, robotY, mazeOffset)) {
+      return leftX;
+    }
+  }
+
+  return firstX;
+}
+
 /**
  * Check player collision with maze walls.
  * Checks the player's bounding box (8px wide, 12px tall).
@@ -1508,11 +1529,11 @@ function resetRobots(zp: ZeroPage): void {
   zp.initRobotDelay = 0;
   zp.lastRobotVertPos = 75;
   zp.temp02 = 0;
-  zp.loopCount = 135;
+  zp.loopCount = ROBOT_RANDOM_X_MAX;
   for (let i = MAX_ROBOTS - 1; i >= 0; i--) {
     zp.lastRobotVertPos = i === MAX_ROBOTS - 1 ? 75 : zp.lastRobotVertPos - (H_ROBOT + 1);
     zp.robotVertPos[i] = zp.lastRobotVertPos;
-    zp.robotHorizPos[i] = nextRandom(zp);
+    zp.robotHorizPos[i] = chooseSafeRobotHorizPos(zp, zp.lastRobotVertPos, zp.mazeOffset ?? 0);
     zp.robotAnimationIndex[i] = nextRandom(zp) & 7;
   }
   // Clear missiles (ASM clears these in IncrementGameLevel before

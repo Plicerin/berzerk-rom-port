@@ -9,6 +9,7 @@ import {
   PLAYER_ENTERING_EAST,
   PLAYER_ENTERING_WEST,
   ROBOT_DEATH_ANIM_OFFSET,
+  MAX_ROBOTS,
 } from "../constants";
 
 function buildStateMachine(
@@ -42,7 +43,36 @@ function isRobotBoxSafe(x: number, y: number, mazeOffset: number): boolean {
   );
 }
 
+function expectActiveRobotsInOpenMaze(zp: ReturnType<typeof createZeroPage>): void {
+  const mazeOffset = zp.mazeOffset ?? 0;
+
+  for (let i = 0; i < MAX_ROBOTS; i++) {
+    if (zp.robotVertPos[i] === 0x7f) continue;
+    expect(isRobotBoxSafe(zp.robotHorizPos[i], zp.robotVertPos[i], mazeOffset)).toBe(true);
+  }
+}
+
 describe("robot movement and room transition regressions", () => {
+  it("spawns every active robot outside maze walls", () => {
+    const zp = createZeroPage();
+    initGame(zp, 0, NTSC);
+    const state = buildStateMachine(zp, NTSC);
+
+    expectActiveRobotsInOpenMaze(zp);
+
+    for (let room = 0; room < 16; room++) {
+      zp.gameState = 0xff;
+      zp.tempPlayerExitingPos = PLAYER_ENTERING_SOUTH;
+      zp.upperPlayfieldLimit = 10;
+      zp.lowerPlayfieldLimit = 10;
+      zp.playerVertPos = 0x7f;
+
+      tick(state);
+
+      expectActiveRobotsInOpenMaze(zp);
+    }
+  });
+
   it("moves at least one active robot over time instead of freezing the room", () => {
     const zp = createZeroPage();
     initGame(zp, 0, NTSC);

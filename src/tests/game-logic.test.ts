@@ -1085,8 +1085,11 @@ describe("checkMissileCollisions (via tick)", () => {
     zp.playerMissileDirection = 0x08;
     zp.playerMissileHorizPos = 50;
     zp.playerMissileVertPos = 50;
-    zp.evilOttoHorizPos = 50;
-    zp.evilOttoVertPos = 50;
+    zp.evilOttoHorizPos = 52;
+    zp.evilOttoVertPos = 100;
+    for (let i = 0; i < MAX_ROBOTS; i++) {
+      zp.robotVertPos[i] = 0x7f;
+    }
     const gsm = buildStateMachine(zp, NTSC);
 
     tick(gsm);
@@ -1102,12 +1105,10 @@ describe("checkMissileCollisions (via tick)", () => {
     zp.playerMissileDirection = 0x08;
     zp.playerMissileHorizPos = 50;
     zp.playerMissileVertPos = 50;
-    zp.evilOttoHorizPos = 50;
-    zp.evilOttoVertPos = 50;
-    // Clear all robots so the missile doesn't hit one
-    for (let i = 0; i < 6; i++) {
-      zp.robotHorizPos[i] = 0;
-      zp.robotVertPos[i] = 0;
+    zp.evilOttoHorizPos = 52;
+    zp.evilOttoVertPos = 100;
+    for (let i = 0; i < MAX_ROBOTS; i++) {
+      zp.robotVertPos[i] = 0x7f;
     }
     const gsm = buildStateMachine(zp, NTSC);
 
