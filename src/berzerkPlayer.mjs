@@ -14,7 +14,8 @@ const KEYS = {
   ArrowRight: 'right', KeyD: 'right', ArrowLeft: 'left', KeyA: 'left',
   ArrowDown: 'down', KeyS: 'down', ArrowUp: 'up', KeyW: 'up', Space: 'fire', KeyZ: 'fire',
 };
-const LIVES = 0xda; // negative ($AA) while choosing a game and after a game ends
+const LIVES = 0xda;
+const POWER_ON_FRAMES = 90; // negative ($AA) while choosing a game and after a game ends
 
 export function mountPlayer(root) {
   const canvas = root.querySelector('canvas');
@@ -54,9 +55,12 @@ export function mountPlayer(root) {
     adv.bus.swcha = swcha;
     adv.bus.inpt4 = on('fire') ? 0x00 : 0x80;
     // SWCHB: bit 0 RESET and bit 1 SELECT (low = pressed); the NTSC cartridge reads nothing else
-    adv.bus.swchb = (resetHold > 0 || switchDown.reset ? 0 : 0x01) | (selectHold > 0 || switchDown.select ? 0 : 0x02) | 0x08;
+    // a Game Reset in the cartridge's first second leaves it waiting for the
+    // button (the ROM does that too), so the Play button's reset waits until then
+    const resetNow = (resetHold > 0 && adv.bus.frame >= POWER_ON_FRAMES) || switchDown.reset;
+    adv.bus.swchb = (resetNow ? 0 : 0x01) | (selectHold > 0 || switchDown.select ? 0 : 0x02) | 0x08;
     adv.runFrame();
-    if (resetHold > 0) resetHold -= 1;
+    if (resetHold > 0 && resetNow) resetHold -= 1;
     if (selectHold > 0) selectHold -= 1;
     audio.update(adv.bus.audio);
     // hints follow the game: choosing a game, playing, game over
@@ -119,9 +123,9 @@ export function mountPlayer(root) {
     lastState = ''; // show the hint for wherever the game is now
     if (poster) poster.hidden = true;
     canvas.focus({ preventScroll: true });
+    pressReset(); // before the audio: starting it can take a moment, the game should not wait
     await audio.start();
     silence();
-    pressReset();
   }
 
   function togglePause() {
