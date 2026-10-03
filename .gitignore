@@ -3,5 +3,16 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
-Berzerk/
+# the cartridge ROM and anything assembled from the disassembly stay local
+rom/
+*.a26
+*.bin
+tools/dasm/
+tools/build/
+tools/out/
+*.zip
+# local reference material
+Berzerk_1982_Atari.pdf
+pi-session-*.html
+tmp/
 .mimocode/
