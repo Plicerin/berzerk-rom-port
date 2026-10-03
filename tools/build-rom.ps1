@@ -41,7 +41,7 @@ try {
 Copy-Item (Join-Path $tmp 'berzerk.bin'), (Join-Path $tmp 'berzerk.lst'), (Join-Path $tmp 'berzerk.sym') $out -Force
 
 $md5 = (Get-FileHash (Join-Path $out 'berzerk.bin') -Algorithm MD5).Hash.ToLower()
-if ($md5 -ne '136f75c4dd02c29283752b7e5799f978') { throw "assembled ROM MD5 $md5 is not the expected cartridge image" }
+if ($md5 -ne '136f75c4dd02c29283752b7e5799f978') { throw "assembled ROM MD5 $md5 does not match the cartridge" }
 New-Item -ItemType Directory -Force (Join-Path $root 'rom') | Out-Null
 Copy-Item (Join-Path $out 'berzerk.bin') (Join-Path $root 'rom\berzerk.a26') -Force
 "OK: tools/build/berzerk.bin ($md5)"

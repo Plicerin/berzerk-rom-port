@@ -11,7 +11,7 @@
   <meta name="apple-mobile-web-app-title" content="Berzerk">
   <link rel="apple-touch-icon" href="img/icon-180.png">
   <title>Berzerk — Atari 2600, 1982</title>
-  <meta name="description" content="Dan Hitchens' Berzerk for the Atari 2600, translated from the cartridge instruction by instruction and checked against the ROM frame by frame.">
+  <meta name="description" content="Dan Hitchens' Berzerk for the Atari 2600, translated from the cartridge instruction by instruction and checked against the real ROM frame by frame.">
   <link rel="icon" href="img/icon-192.png">
   <style>
     /* Same landing-page system as the Dracula, River Raid, Donkey Kong and Adventure ports, in Berzerk's TIA colors. */
@@ -296,9 +296,9 @@
 
   <section class="panel lp" id="rom">
     <h2>Built from the ROM</h2>
-    <p class="lp-lead">This is not an emulator, and not a remake. A translator read the cartridge's 6502 code, using Dennis Debro's disassembly for labels and comments, and wrote out <b>each instruction as a line of JavaScript</b> with its cycle count. The translated game runs on a model of the 2600's TIA and RIOT chips, and a 6502 core runs the ROM beside it to prove the two match.</p>
+    <p class="lp-lead">This is not an emulator, and not a remake. A translator read the cartridge's 6502 code, using Dennis Debro's disassembly for labels and comments, and wrote out <b>each instruction as a line of JavaScript</b> with its cycle count. The translated game runs on a model of the 2600's TIA and RIOT chips, and a 6502 core runs the real ROM beside it to prove the two match.</p>
     <div class="lp-stats">
-      <div class="lp-stat"><span class="n">0</span><span class="t">differences from the ROM in 100,000 compared frames: registers, cycles, RAM, chip writes and pixels</span></div>
+      <div class="lp-stat"><span class="n">0</span><span class="t">differences from the cartridge in 100,000 compared frames: registers, cycles, RAM, chip writes and pixels</span></div>
       <div class="lp-stat"><span class="n">1,450</span><span class="t">instructions translated, each with its cycle count</span></div>
       <div class="lp-stat"><span class="n">12</span><span class="t">game variations, all played in the comparison</span></div>
       <div class="lp-stat"><span class="n">4,096</span><span class="t">bytes in the whole cartridge, code and graphics</span></div>

@@ -7,7 +7,7 @@ import { VcsBus, TIA, CYCLES_PER_LINE } from '../../src/vcsBus.mjs';
 
 export { TIA, CYCLES_PER_LINE };
 
-// Berzerk (Atari, 1982), the NTSC cartridge as assembled from the disassembly
+// Berzerk (Atari, 1982), the standard NTSC cartridge
 export const ROM_MD5 = '136f75c4dd02c29283752b7e5799f978';
 
 export function loadRom(path = 'rom/berzerk.a26') {

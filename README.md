@@ -1,6 +1,6 @@
 # Berzerk (Atari 2600) — ROM port
 
-Dan Hitchens' *Berzerk* (Atari, 1982), translated into JavaScript instruction for instruction from the cartridge and checked against the ROM frame by frame. Play it at **https://plicerin.github.io/berzerk-rom-port/**.
+Dan Hitchens' *Berzerk* (Atari, 1982), translated into JavaScript instruction for instruction from the original cartridge and checked against the real ROM frame by frame. Play it at **https://plicerin.github.io/berzerk-rom-port/**.
 
 ## How it works
 
@@ -37,7 +37,7 @@ node tools/verify-recomp.mjs 20000 1 cover    # translation vs the ROM, frame by
 node tools/verify-tia.mjs 3000 1              # fast TIA model vs the per-pixel reference
 ```
 
-`tools/build-rom.ps1` makes two adjustments for current DASM without touching the source: today's `macro.h` defines `BOUNDARY N` as "pad to a multiple of N", so `BOUNDARY 0` divides by zero, and the build defines it as the disassembly means it ("pad to byte N of the page", as `macro.h`'s own comment describes); and `<A-B` low-byte expressions that come out negative are written as `[A-B] & $FF`. The result has MD5 `136f75c4dd02c29283752b7e5799f978`, which should match the cartridge; that is still to be confirmed against a dump of a real cartridge.
+`tools/build-rom.ps1` makes two adjustments for current DASM without touching the source: today's `macro.h` defines `BOUNDARY N` as "pad to a multiple of N", so `BOUNDARY 0` divides by zero, and the build defines it as the disassembly means it ("pad to byte N of the page", as `macro.h`'s own comment describes); and `<A-B` low-byte expressions that come out negative are written as `[A-B] & $FF`. The result has MD5 `136f75c4dd02c29283752b7e5799f978` and matches a dump of the cartridge (`Berzerk (USA).a26`) byte for byte.
 
 `verify-recomp` runs the ROM on a 6502 interpreter (`tools/atari/`) next to the translation with identical inputs, including Game Select, Game Reset and the fire-button quick start, and requires identical CPU registers, cycle counts, RAM, TIA write logs and pictures after every frame. With `cover`, identical RAM pokes in both machines top up the lives and set random levels and maze numbers now and then. 100,000 frames over five seeds show no differences, across all twelve games.
 
